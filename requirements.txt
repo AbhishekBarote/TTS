@@ -1,0 +1,21 @@
+# Core Web Framework & ASGI Server
+fastapi==0.142.2
+uvicorn==0.54.0
+
+# Data Validation & Schemas
+pydantic==2.13.5
+
+# High-Performance Fuzzy & Lexical Duplicate Matching
+rapidfuzz==3.10.0
+
+# HTTP Client, Connection Pooling & Web Scraping
+requests==2.32.3
+urllib3==2.2.3
+beautifulsoup4==4.15.0
+
+# Machine Learning & Vector Similarity (TF-IDF & Embeddings)
+scikit-learn==1.5.0
+numpy==1.26.4
+
+# Environment Configuration
+python-dotenv==1.2.4

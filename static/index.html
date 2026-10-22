@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audio Research Hub - Indian English TTS Dataset</title>
+  <meta name="description"
+    content="Centralized system for collecting, duplicate-checking, and revalidating Indian English audio recordings containing spoken Sanskrit terms.">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap"
+    rel="stylesheet">
+
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body class="hub-body">
+
+  <div class="hub-container">
+
+    <!-- LEFT SIDEBAR -->
+    <aside class="hub-sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-brand-icon">
+          <i class="fa-solid fa-waveform-lines"></i>
+        </div>
+        <div class="sidebar-brand-text">
+          <h1 class="brand-title">Audio Research Hub</h1>
+          <span class="brand-subtitle">Indian English TTS Dataset</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item active" id="side-tab-dashboard" data-tab="dashboard-view">
+          <i class="fa-solid fa-house"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" id="side-tab-add" data-tab="dashboard-view" onclick="focusUrlInput()">
+          <i class="fa-solid fa-circle-plus"></i>
+          <span>Add New Entry</span>
+        </button>
+        <button class="nav-item" id="side-tab-my" data-tab="dashboard-view" onclick="scrollToRecent()">
+          <i class="fa-regular fa-folder-open"></i>
+          <span>My Submissions</span>
+        </button>
+        <button class="nav-item" id="side-tab-review" data-tab="review-view">
+          <i class="fa-solid fa-circle-check"></i>
+          <span>Revalidation</span>
+          <span class="sidebar-badge-red" id="side-pending-badge">0</span>
+        </button>
+        <button class="nav-item" id="side-tab-approved" data-tab="approved-view">
+          <i class="fa-solid fa-database"></i>
+          <span>Approved Dataset</span>
+          <span class="sidebar-badge-green" id="side-approved-badge">0</span>
+        </button>
+        <button class="nav-item" id="side-tab-all" data-tab="history-view">
+          <i class="fa-solid fa-table-list"></i>
+          <span>All Records</span>
+        </button>
+        <button class="nav-item" id="side-tab-export" onclick="triggerCsvExport()">
+          <i class="fa-solid fa-file-arrow-down"></i>
+          <span>Export CSV (22 Columns)</span>
+        </button>
+        <button class="nav-item" id="side-tab-import" onclick="openImportModal()">
+          <i class="fa-solid fa-file-arrow-up"></i>
+          <span>Import CSV</span>
+        </button>
+        <button class="nav-item" id="side-tab-llm" onclick="openLlmConfigModal()">
+          <i class="fa-solid fa-brain"></i>
+          <span>LLM Pre-Filter Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="network-status-pill">
+          <span class="status-indicator-dot"></span>
+          <span>Wi-Fi Network Active (8088)</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN APP CONTENT AREA -->
+    <div class="hub-main-area">
+
+      <!-- TOP HEADER BAR -->
+      <header class="hub-header">
+        <div class="header-left">
+          <h2 class="view-heading-title" id="current-view-title">Dashboard Overview</h2>
+        </div>
+
+        <!-- UNIVERSAL LOW-LATENCY SEARCHBAR FOR WEBSITES & YOUTUBE LINKS -->
+        <div class="header-center">
+          <div class="header-search-wrapper" title="Fast URL Check: Paste any YouTube link or Website URL">
+            <i class="fa-solid fa-magnifying-glass header-search-icon"></i>
+            <input type="url" id="global-search-input" class="header-search-input"
+              placeholder="Search or paste any YouTube link or Website URL..." autocomplete="off">
+            <span id="global-link-type-badge" class="header-link-badge hidden">YouTube</span>
+            <button type="button" class="header-search-btn btn-search-check" id="btn-global-check"
+              title="Fast duplicate check">
+              <i class="fa-solid fa-bolt"></i> Verify & Check
+            </button>
+          </div>
+        </div>
+
+        <div class="header-right">
+          <!-- LLM Endpoint Status & Settings -->
+          <button type="button" class="header-llm-btn" id="btn-open-llm-settings" onclick="openLlmConfigModal()"
+            title="Configure Self-Hosted LLM Endpoint">
+            <i class="fa-solid fa-brain"></i>
+            <span>LLM Pre-Filter</span>
+          </button>
+
+          <!-- Active Researcher Profile -->
+          <div class="user-profile-badge" id="profile-container" title="Click to change your researcher name">
+            <div class="profile-avatar" id="profile-avatar">RA</div>
+            <div class="profile-info">
+              <span class="profile-name" id="profile-name-display">Researcher A</span>
+              <span class="profile-role">Researcher <i class="fa-solid fa-chevron-down text-xs"></i></span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- SCROLLABLE CONTENT BODY -->
+      <main class="hub-content">
+
+        <!-- ============================================== -->
+        <!-- VIEW 1: MAIN DASHBOARD (EXACT REFERENCE UI)    -->
+        <!-- ============================================== -->
+        <section id="dashboard-view" class="view-panel active">
+
+          <!-- TOP 4 METRIC CARDS -->
+          <div class="metrics-grid">
+
+            <!-- Card 1: My Submissions -->
+            <div class="metric-card">
+              <div class="metric-card-icon icon-blue">
+                <i class="fa-solid fa-diagram-project"></i>
+              </div>
+              <div class="metric-card-content">
+                <span class="metric-label">My Submissions</span>
+                <div class="metric-number" id="dash-my-submissions-count">0</div>
+                <span class="metric-subtext" id="dash-my-subtext">3 pending &bull; 7 approved &bull; 2 rejected</span>
+              </div>
+            </div>
+
+            <!-- Card 2: Pending Revalidation -->
+            <div class="metric-card">
+              <div class="metric-card-icon icon-amber">
+                <i class="fa-regular fa-clock"></i>
+              </div>
+              <div class="metric-card-content">
+                <span class="metric-label">Pending Revalidation</span>
+                <div class="metric-number" id="dash-pending-count">0</div>
+                <span class="metric-subtext text-amber">Awaiting your review</span>
+              </div>
+            </div>
+
+            <!-- Card 3: Approved Records -->
+            <div class="metric-card">
+              <div class="metric-card-icon icon-emerald">
+                <i class="fa-solid fa-circle-check"></i>
+              </div>
+              <div class="metric-card-content">
+                <span class="metric-label">Approved Records</span>
+                <div class="metric-number" id="dash-approved-count">0</div>
+                <span class="metric-subtext text-emerald">Ready for export (DDMMYY)</span>
+              </div>
+            </div>
+
+            <!-- Card 4: Total Hours -->
+            <div class="metric-card">
+              <div class="metric-card-icon icon-purple">
+                <i class="fa-solid fa-stopwatch"></i>
+              </div>
+              <div class="metric-card-content">
+                <span class="metric-label">Total Hours (Approved)</span>
+                <div class="metric-number" id="dash-total-hours">0.0</div>
+                <span class="metric-subtext" id="dash-speakers-subtext">Across 0 speakers</span>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- MAIN 2-COLUMN DASHBOARD GRID -->
+          <div class="dashboard-grid">
+
+            <!-- LEFT COLUMN: ADD NEW AUDIO ENTRY CARD -->
+            <div class="card card-intake">
+              <div class="card-intake-header">
+                <div class="header-icon-square">
+                  <i class="fa-solid fa-plus"></i>
+                </div>
+                <div>
+                  <h3 class="card-title">Add New Audio Entry</h3>
+                  <p class="card-subtitle">Paste a video/audio link and fill in the details. The system will check for
+                    duplicates automatically.</p>
+                </div>
+              </div>
+
+              <!-- STEPPER INDICATOR -->
+              <div class="form-stepper">
+                <div class="step-item active" id="step-node-1">
+                  <span class="step-circle">1</span>
+                  <span class="step-text">Check Link</span>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-item" id="step-node-2">
+                  <span class="step-circle">2</span>
+                  <span class="step-text">Enter Details</span>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-item" id="step-node-3">
+                  <span class="step-circle">3</span>
+                  <span class="step-text">Review & Submit</span>
+                </div>
+              </div>
+
+              <form id="submission-form" novalidate>
+
+                <!-- STEP 1: LINK & CHECK -->
+                <div class="intake-section">
+                  <div class="label-row-between">
+                    <label for="input-audio-link" class="intake-label required" style="margin-bottom:0;">
+                      1. Unified Searchbar: YouTube & Websites
+                    </label>
+                    <div id="unified-link-detector" class="link-type-chip hidden">
+                      <i class="fa-solid fa-globe" id="unified-chip-icon"></i>
+                      <span id="unified-link-type-text">Website</span>
+                    </div>
+                  </div>
+
+                  <div class="url-input-cluster mt-1">
+                    <div class="url-input-box-wrapper">
+                      <i class="fa-solid fa-link input-prefix-icon" id="unified-input-icon"></i>
+                      <input type="url" id="input-audio-link" class="hub-input unified-url-input"
+                        placeholder="Paste any YouTube link or Website URL (e.g. https://youtube.com/watch?v=... or https://news.site/article)"
+                        required autocomplete="off">
+                      <button type="button" class="btn-input-action hidden" id="btn-clear-audio-link"
+                        title="Clear input">
+                        <i class="fa-solid fa-xmark"></i>
+                      </button>
+                      <button type="button" class="btn-input-action" id="btn-paste-audio-link"
+                        title="Paste from clipboard">
+                        <i class="fa-solid fa-paste"></i>
+                      </button>
+                    </div>
+                    <button type="button" class="btn btn-check" id="btn-manual-check"
+                      title="Run fast low-latency duplicate check">
+                      <i class="fa-solid fa-bolt"></i> Verify Link
+                    </button>
+                  </div>
+
+
+
+                  <!-- Dynamic Low-Latency Status & Provenance Alert Box -->
+                  <div id="duplicate-status-box" class="status-banner banner-success hidden">
+                    <div class="banner-icon" id="banner-status-icon"><i class="fa-solid fa-circle-check"></i></div>
+                    <div class="banner-body">
+                      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-1">
+                        <div class="d-flex align-items-center gap-2">
+                          <span id="banner-status-pill" class="llm-badge-pill badge-unique">VERIFIED UNIQUE</span>
+                          <span id="banner-latency-chip" class="latency-chip"><i class="fa-solid fa-bolt"></i>
+                            45ms</span>
+                        </div>
+                        <span id="banner-platform-tag" class="text-xs text-muted font-mono">Platform: Web</span>
+                      </div>
+
+                      <strong id="banner-title" class="banner-headline">Verified Unique Content</strong>
+                      <p id="banner-desc" class="banner-explanation">This content does not duplicate any existing
+                        records.</p>
+
+                      <!-- Evidence chips -->
+                      <div id="banner-evidence-chips" class="evidence-chips mt-1"></div>
+
+                      <!-- Extracted Essential Content Preview Drawer -->
+                      <div id="banner-metadata-drawer" class="fast-meta-drawer mt-2">
+                        <div class="fast-meta-grid">
+                          <div class="fast-meta-item">
+                            <span class="fast-meta-label">Title</span>
+                            <span class="fast-meta-val" id="fast-meta-title">—</span>
+                          </div>
+                          <div class="fast-meta-item">
+                            <span class="fast-meta-label">Channel / Author</span>
+                            <span class="fast-meta-val" id="fast-meta-author">—</span>
+                          </div>
+                          <div class="fast-meta-item">
+                            <span class="fast-meta-label">Duration</span>
+                            <span class="fast-meta-val font-mono" id="fast-meta-duration">—</span>
+                          </div>
+                          <div class="fast-meta-item">
+                            <span class="fast-meta-label">Canonical URL</span>
+                            <span class="fast-meta-val font-mono text-xs break-all" id="fast-meta-canonical">—</span>
+                          </div>
+                          <div class="fast-meta-item full-width" id="fast-meta-hash-row">
+                            <div class="d-flex align-items-center justify-content-between">
+                              <span class="fast-meta-label"><i class="fa-solid fa-hashtag"></i> Content Hash
+                                (SHA-256)</span>
+                              <button type="button" class="btn-text-link text-xs" id="btn-copy-fast-hash"
+                                onclick="copyFastContentHash()">
+                                <i class="fa-regular fa-copy"></i> Copy Hash
+                              </button>
+                            </div>
+                            <span class="fast-meta-hash font-mono text-xs" id="fast-meta-hash">—</span>
+                          </div>
+                        </div>
+                      </div>
+
+                    </div>
+                  </div>
+                </div>
+
+                <!-- STEP 2: DETAILS GRID -->
+                <div class="intake-section mt-3">
+                  <h4 class="intake-subheading" id="intake-details-heading">2. Enter Media & Content Details</h4>
+
+                  <div class="details-2col-grid mt-2">
+
+                    <!-- Left: Research Date -->
+                    <div class="form-field">
+                      <label for="input-research-date" class="intake-label required">Research Date</label>
+                      <div class="input-with-icon">
+                        <input type="date" id="input-research-date" class="hub-input" required>
+                      </div>
+                    </div>
+
+                    <!-- Right: Gender -->
+                    <div class="form-field">
+                      <label for="select-gender" class="intake-label required">Gender</label>
+                      <select id="select-gender" class="hub-input" required>
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
+
+                    <!-- Left: Source (Manual Entry) -->
+                    <div class="form-field">
+                      <label for="input-source" class="intake-label required">Source</label>
+                      <input type="text" id="input-source" class="hub-input" placeholder="YouTube" required>
+                    </div>
+
+                    <!-- Right: Duration (Auto-recorded) -->
+                    <div class="form-field">
+                      <label for="input-duration" class="intake-label required">Before Processing Duration</label>
+                      <input type="text" id="input-duration" class="hub-input font-mono" placeholder="18:35" required>
+                      <div class="text-xs text-muted mt-1">Format: MM:SS or HH:MM:SS</div>
+                    </div>
+
+                    <!-- Left: Description (Title & Channel) -->
+                    <div class="form-field col-span-1">
+                      <label for="input-description" class="intake-label required">Description</label>
+                      <textarea id="input-description" class="hub-input font-mono" rows="3"
+                        placeholder="Indian English lecture on ancient Indian history&#10;channel : swapnalok"
+                        required></textarea>
+                    </div>
+
+                    <!-- Right Stack: Accent, Licensing, Speaker ID -->
+                    <div class="form-field-stack">
+                      <div class="form-field">
+                        <label for="input-accent" class="intake-label required">Accent</label>
+                        <select id="input-accent" class="hub-input" required>
+                          <option value="Indian English">Indian English</option>
+                          <option value="Other">Other</option>
+                        </select>
+                      </div>
+
+                      <div class="form-field mt-2">
+                        <label for="select-licensing" class="intake-label required">Licensing</label>
+                        <select id="select-licensing" class="hub-input" required>
+                          <option value="CC BY (Attribution Required)">CC BY (Attribution Required)</option>
+                          <option value="Public Domain">Public Domain</option>
+                          <option value="CC BY-SA">CC BY-SA</option>
+                          <option value="CC BY-NC">CC BY-NC</option>
+                          <option value="Permission Granted">Permission Granted</option>
+                          <option value="Standard YouTube License">Standard YouTube License</option>
+                        </select>
+                      </div>
+
+                      <div class="form-field mt-2">
+                        <div class="label-row-between">
+                          <label for="input-speaker-id" class="intake-label required">Speakers ID</label>
+                          <button type="button" class="btn-link-action" id="btn-auto-spk">Suggest Next</button>
+                        </div>
+                        <input type="text" id="input-speaker-id" class="hub-input font-mono" placeholder="SPK_001"
+                          required>
+
+                        <!-- Live 3.5h Cap Meter (Section 9) -->
+                        <div id="speaker-duration-meter" class="speaker-duration-meter mt-2 hidden">
+                          <div class="meter-header">
+                            <span class="meter-label"><i class="fa-solid fa-stopwatch"></i> Speaker Limit (3.5h /
+                              12,600s):</span>
+                            <span class="meter-val font-mono" id="spk-meter-text">0s / 3h 30m</span>
+                          </div>
+                          <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" id="spk-progress-fill" style="width: 0%;"></div>
+                          </div>
+                          <div class="meter-subtext">
+                            <span id="spk-remaining-text">3h 30m remaining</span>
+                            <span id="spk-delta-text" class="text-emerald"></span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  <!-- Researcher Name hidden/manual sync -->
+                  <input type="hidden" id="input-researched-by" value="Researcher A">
+                </div>
+
+                <!-- FOOTER ACTIONS -->
+                <div class="form-bottom-actions">
+                  <button type="button" class="btn btn-secondary" id="btn-cancel-form">Cancel</button>
+                  <button type="submit" class="btn btn-primary" id="btn-submit-review">
+                    <span>Next: Review & Submit</span> <i class="fa-solid fa-arrow-right"></i>
+                  </button>
+                </div>
+
+              </form>
+            </div>
+
+            <!-- RIGHT COLUMN: DUPLICATE CARD + RECENT SUBMISSIONS -->
+            <div class="sidebar-cards-col">
+
+
+
+              <!-- CARD 2: RECENT SUBMISSIONS (MY ENTRIES) -->
+              <div class="card card-recent-side" id="recent-submissions-card">
+                <div class="recent-header">
+                  <h4 class="recent-title">Recent Submissions (My Entries)</h4>
+                  <button type="button" class="btn-link" onclick="switchTab('approved-view')">View All</button>
+                </div>
+
+                <div class="table-responsive-clean">
+                  <table class="clean-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Title / Description</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody id="recent-submissions-tbody">
+                      <!-- Dynamically rendered -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+
+          <!-- SPEAKER DURATION LEDGERS (SECTION 9: 3.5-HOUR CAP) -->
+          <div class="speaker-ledgers-container card p-4 mt-3">
+            <div class="panel-header-clean">
+              <div>
+                <h4 class="panel-h3"><i class="fa-solid fa-chart-pie text-primary"></i> Speaker Duration
+                </h4>
+                <p class="text-xs text-muted">Tracking cumulative accepted audio duration per speaker. Cap is strictly
+                  enforced at 12,600 seconds (3.5 hours).</p>
+              </div>
+              <div class="d-flex align-items-center gap-2">
+                <span class="badge badge-gray text-xs" id="speaker-count-badge">Loading Speakers...</span>
+                <button class="btn btn-secondary btn-sm" id="btn-refresh-speaker-ledgers"
+                  title="Synchronize and Refresh"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+              </div>
+            </div>
+
+            <div id="dashboard-speakers-grid" class="speaker-grid mt-3">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+        </section>
+
+        <!-- ============================================== -->
+        <!-- VIEW 2: REVALIDATION QUEUE VIEW                -->
+        <!-- ============================================== -->
+        <section id="review-view" class="view-panel">
+          <div class="card p-4">
+            <div class="panel-header-clean">
+              <div>
+                <h3 class="panel-h3">Revalidation Review Queue</h3>
+                <p class="text-sm text-muted">Inspect candidate submissions awaiting verification before adding to
+                  approved dataset.</p>
+              </div>
+              <span class="badge badge-amber" id="queue-badge-count">0 Waiting</span>
+            </div>
+
+            <div class="table-controls mt-3">
+              <input type="text" id="queue-search" class="hub-input search-box"
+                placeholder="Search queue by Speaker, Description, or Researcher...">
+              <button class="btn btn-secondary btn-sm" id="btn-refresh-queue"><i class="fa-solid fa-arrows-rotate"></i>
+                Refresh</button>
+            </div>
+
+            <div id="queue-container" class="queue-grid mt-3"></div>
+            <div id="queue-empty-state" class="empty-box hidden">
+              <i class="fa-solid fa-check-double fa-2x text-emerald"></i>
+              <h4>All Caught Up!</h4>
+              <p class="text-sm text-muted">No records are currently pending revalidation.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================== -->
+        <!-- VIEW 3: APPROVED DATASET & CSV EXPORT (22 COLUMNS) -->
+        <!-- ============================================== -->
+        <section id="approved-view" class="view-panel">
+          <div class="card p-4">
+            <div class="panel-header-clean">
+              <div>
+                <h3 class="panel-h3">Approved Audio Dataset</h3>
+                <p class="text-sm text-muted">Records verified for quality. Strictly maintains the 22-column production
+                  schema with dates formatted as <strong>DD/MM/YYYY</strong>.</p>
+              </div>
+              <div class="header-action-group">
+                <button class="btn btn-outline-primary" id="btn-tab-open-import">
+                  <i class="fa-solid fa-file-arrow-up"></i> Import Previous CSV
+                </button>
+                <button class="btn btn-secondary" id="btn-preview-csv">
+                  <i class="fa-solid fa-eye"></i> Preview Export
+                </button>
+                <a href="/api/export/csv" class="btn btn-primary" id="btn-download-csv">
+                  <i class="fa-solid fa-file-arrow-down"></i> Export CSV (22 Columns)
+                </a>
+              </div>
+            </div>
+
+            <div class="table-controls mt-3">
+              <input type="text" id="approved-search" class="hub-input search-box"
+                placeholder="Search approved records by Speaker, Title, Source, Licensing, Dataset...">
+              <input type="text" id="filter-source" class="hub-input select-compact" placeholder="Filter by source...">
+            </div>
+
+            <div class="table-container-card mt-3">
+              <table class="data-table" id="approved-table">
+                <thead>
+                  <tr>
+                    <th title="Sorted: Current date at top">Date (DD/MM/YYYY) <i
+                        class="fa-solid fa-arrow-down-wide-short text-emerald"></i></th>
+                    <th>Source</th>
+                    <th>Audio_Link</th>
+                    <th>Text_Link</th>
+                    <th>Description</th>
+                    <th>Dataset Name</th>
+                    <th>Gender</th>
+                    <th>Duration</th>
+                    <th>Speakers_ID</th>
+                    <th>Speaker/Channel_Name</th>
+                    <th>Accent</th>
+                    <th>Licensing</th>
+                    <th>Researched_By</th>
+                    <th>Assigned_to</th>
+                    <th>Handover</th>
+                    <th>Audit</th>
+                  </tr>
+                </thead>
+                <tbody id="approved-tbody"></tbody>
+              </table>
+            </div>
+
+            <div class="schema-note mt-2">
+              <i class="fa-solid fa-circle-check text-emerald"></i>
+              <span>Export strictly maintains the 22-column production schema (Date, Completion_date, Source,
+                Audio_Link, Text_Link, Description, Dataset Name, Gender, Before_Processing_Duration,
+                After_Processing_Duration, Total_files, Researched_By, Assigned_to, Status, Data_type, Data_available,
+                Speakers_ID, Speaker/Channel_Name, Accent, Licensing, Handover, Remark).</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================== -->
+        <!-- VIEW 4: ALL RECORDS & AUDIT HISTORY            -->
+        <!-- ============================================== -->
+        <section id="history-view" class="view-panel">
+          <div class="card p-4">
+            <div class="panel-header-clean">
+              <div>
+                <h3 class="panel-h3">All Database Records & Audit History</h3>
+                <p class="text-sm text-muted">Complete lifecycle records across all statuses (Approved, Pending,
+                  Rejected, Draft).</p>
+              </div>
+            </div>
+
+            <div class="status-tabs-row mt-2">
+              <button class="status-tab-btn active" data-status="ALL">All (<span id="count-all">0</span>)</button>
+              <button class="status-tab-btn" data-status="APPROVED">Approved (<span
+                  id="count-approved">0</span>)</button>
+              <button class="status-tab-btn" data-status="PENDING_REVALIDATION">Pending (<span
+                  id="count-pending">0</span>)</button>
+              <button class="status-tab-btn" data-status="REJECTED_BY_RESEARCHER">Rejected by Researcher (<span
+                  id="count-rej-res">0</span>)</button>
+              <button class="status-tab-btn" data-status="REJECTED_AT_REVALIDATION">Rejected at Revalidation (<span
+                  id="count-rej-rev">0</span>)</button>
+              <button class="status-tab-btn" data-status="PENDING_RESEARCH">Drafts (<span
+                  id="count-draft">0</span>)</button>
+            </div>
+
+            <div class="table-container-card mt-3">
+              <table class="data-table" id="all-records-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Status</th>
+                    <th>Date (DDMMYY)</th>
+                    <th>Source</th>
+                    <th>Speaker ID</th>
+                    <th>Duration</th>
+                    <th>Description</th>
+                    <th>Researched By</th>
+                    <th>Revalidated By</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="all-records-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+
+      </main>
+    </div>
+
+  </div>
+
+  <!-- ============================================== -->
+  <!-- MODAL: CSV IMPORT & DE-DUPLICATION            -->
+  <!-- ============================================== -->
+  <div id="modal-upload-csv" class="modal-overlay hidden">
+    <div class="modal-dialog modal-md">
+      <div class="modal-header">
+        <div class="modal-header-info">
+          <i class="fa-solid fa-file-arrow-up text-primary fa-lg"></i>
+          <h3 class="modal-title">Import Previous CSV Data</h3>
+        </div>
+        <button class="modal-close-btn" id="modal-upload-close">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <p class="text-sm text-muted mb-3">
+          Upload your existing dataset CSV. New records will be ingested and duplicates automatically matched and
+          skipped to eliminate redundant research.
+        </p>
+
+        <div class="csv-drop-zone" id="csv-drop-zone">
+          <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
+          <h4>Drag & Drop your CSV file here</h4>
+          <span class="text-xs text-muted">Supports RFC 4180 CSV, UTF-8, and Excel files</span>
+          <button type="button" class="btn btn-secondary btn-sm mt-2" id="btn-browse-file">Browse File</button>
+          <input type="file" id="csv-file-input" accept=".csv" class="hidden">
+        </div>
+
+        <div id="csv-selected-info" class="card mt-2 hidden" style="padding: 0.75rem; background: #f8fafc;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <strong id="csv-file-name" class="text-sm">data.csv</strong>
+              <div class="text-xs text-muted" id="csv-file-size">0 KB &bull; 0 lines</div>
+            </div>
+            <span class="badge badge-emerald">Ready to Import</span>
+          </div>
+        </div>
+
+        <div class="form-field mt-3">
+          <label for="import-target-status" class="intake-label">Import Target Status</label>
+          <select id="import-target-status" class="hub-input">
+            <option value="APPROVED">APPROVED (Verified Historical Dataset - Recommended)</option>
+            <option value="PENDING_REVALIDATION">PENDING_REVALIDATION (Add to Review Queue)</option>
+          </select>
+        </div>
+
+        <div id="csv-import-results" class="card mt-3 hidden"
+          style="padding: 1rem; border-color: #16a34a; background: #f0fdf4;">
+          <h4 class="text-emerald" style="margin-bottom: 0.5rem;"><i class="fa-solid fa-circle-check"></i> Import &
+            De-duplication Complete!</h4>
+          <div class="text-sm">Total Rows: <strong id="res-total-rows">0</strong></div>
+          <div class="text-sm text-emerald">Successfully Imported: <strong id="res-imported-count">0</strong></div>
+          <div class="text-sm text-amber">Duplicates Matched & Skipped: <strong id="res-skipped-count">0</strong></div>
+          <p class="text-xs text-muted mt-2">
+            These records are now live in the database and will immediately prevent duplicates on future research.
+          </p>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-import">Close</button>
+        <button class="btn btn-primary" id="btn-start-import" disabled>
+          <i class="fa-solid fa-play"></i> Start Import & Match Duplicates
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================== -->
+  <!-- MODAL: REVALIDATION INSPECTION & APPROVAL      -->
+  <!-- ============================================== -->
+  <div id="modal-revalidate" class="modal-overlay hidden">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div class="modal-header-info">
+          <span class="badge badge-amber" id="modal-rev-status-badge">PENDING_REVALIDATION</span>
+          <h3 class="modal-title" id="modal-rev-title">Candidate Inspection & Revalidation</h3>
+        </div>
+        <button class="modal-close-btn" id="modal-rev-close">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="revalidate-grid">
+          <div class="rev-details-col">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+              <span class="badge badge-blue text-xs"><i class="fa-solid fa-pen-to-square"></i> Reviewer Editable Content</span>
+              <span class="text-xs text-muted">You can edit candidate fields before approving</span>
+            </div>
+
+            <!-- Audio URL Field with open button -->
+            <div class="card p-3 mb-2">
+              <label for="modal-edit-url" class="text-xs text-muted uppercase font-bold d-block mb-1">Audio / Video Link</label>
+              <div class="d-flex gap-2">
+                <input type="url" id="modal-edit-url" class="hub-input font-mono text-xs" placeholder="https://..." style="flex: 1;">
+                <a href="#" id="modal-rev-url-open" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" title="Open Link in New Tab">
+                  <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                </a>
+              </div>
+            </div>
+
+            <!-- Speaker & Duration Details -->
+            <div class="card p-3 mb-2">
+              <div class="grid-2col gap-2">
+                <div>
+                  <label for="modal-edit-channel" class="text-xs text-muted uppercase font-bold d-block mb-1">Speaker / Channel Name</label>
+                  <input type="text" id="modal-edit-channel" class="hub-input text-xs" placeholder="e.g. Dr. Bharat Gupt">
+                </div>
+                <div>
+                  <label for="modal-edit-spk" class="text-xs text-muted uppercase font-bold d-block mb-1">Speaker ID</label>
+                  <input type="text" id="modal-edit-spk" class="hub-input font-mono text-xs" placeholder="e.g. SPK_001">
+                </div>
+              </div>
+
+              <div class="grid-2col gap-2 mt-2">
+                <div>
+                  <label for="modal-edit-duration" class="text-xs text-muted uppercase font-bold d-block mb-1">Duration (HH:MM:SS)</label>
+                  <input type="text" id="modal-edit-duration" class="hub-input font-mono text-xs" placeholder="00:15:00">
+                </div>
+                <div>
+                  <label for="modal-edit-source" class="text-xs text-muted uppercase font-bold d-block mb-1">Source Platform</label>
+                  <select id="modal-edit-source" class="hub-input text-xs">
+                    <option value="YouTube">YouTube</option>
+                    <option value="Internet Archive">Internet Archive</option>
+                    <option value="Vimeo">Vimeo</option>
+                    <option value="Website">Website</option>
+                    <option value="Speech Repository">Speech Repository</option>
+                    <option value="Podcast">Podcast</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="grid-2col gap-2 mt-2">
+                <div>
+                  <label for="modal-edit-gender" class="text-xs text-muted uppercase font-bold d-block mb-1">Gender</label>
+                  <select id="modal-edit-gender" class="hub-input text-xs">
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                    <option value="Unspecified">Unspecified</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="modal-edit-accent" class="text-xs text-muted uppercase font-bold d-block mb-1">Accent</label>
+                  <input type="text" id="modal-edit-accent" class="hub-input text-xs" placeholder="e.g. Indian English">
+                </div>
+              </div>
+
+              <div class="grid-2col gap-2 mt-2">
+                <div>
+                  <label for="modal-edit-licensing" class="text-xs text-muted uppercase font-bold d-block mb-1">Licensing</label>
+                  <input type="text" id="modal-edit-licensing" class="hub-input text-xs" placeholder="e.g. Standard YouTube / CC">
+                </div>
+                <div>
+                  <label for="modal-edit-sanskrit" class="text-xs text-muted uppercase font-bold d-block mb-1">Sanskrit Evidence</label>
+                  <input type="text" id="modal-edit-sanskrit" class="hub-input text-xs" placeholder="Spoken Sanskrit words">
+                </div>
+              </div>
+            </div>
+
+            <!-- Recording Description Textarea -->
+            <div class="card p-3 mb-2">
+              <label for="modal-edit-description" class="text-xs text-muted uppercase font-bold d-block mb-1">Recording Description & Notes</label>
+              <textarea id="modal-edit-description" class="hub-input font-mono text-xs" rows="3" placeholder="Description of the audio content..."></textarea>
+            </div>
+
+            <!-- Researched By info tag -->
+            <div class="d-flex align-items-center justify-content-between p-2 text-xs text-muted" style="background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0;">
+              <div>Submitted By: <strong id="modal-rev-researcher" class="text-primary"></strong></div>
+              <div>Research Date: <span id="modal-rev-date" class="font-mono"></span></div>
+            </div>
+
+            <!-- Compatibility elements for cached client versions -->
+            <div class="hidden" style="display: none;" aria-hidden="true">
+              <a href="#" id="modal-rev-url"><span id="modal-rev-url-text"></span></a>
+              <span id="modal-rev-source"></span>
+              <span id="modal-rev-duration"></span>
+              <span id="modal-rev-gender"></span>
+              <span id="modal-rev-accent"></span>
+              <span id="modal-rev-spk"></span>
+              <pre id="modal-rev-description"></pre>
+            </div>
+          </div>
+
+          <div class="rev-checklist-col">
+            <h4 class="text-sm font-bold mb-2"><i class="fa-solid fa-list-check"></i> Reviewer Verification Checklist
+            </h4>
+            <div class="clean-checklist">
+              <label class="check-label"><input type="checkbox" id="chk-1"> <span>1. URL opens and identifies
+                  recording</span></label>
+              <label class="check-label"><input type="checkbox" id="chk-2"> <span>2. Meets duration threshold (&ge;10
+                  min)</span></label>
+              <label class="check-label"><input type="checkbox" id="chk-3"> <span>3. Indian English speech
+                  verified</span></label>
+              <label class="check-label"><input type="checkbox" id="chk-4"> <span>4. Spoken Sanskrit audible in
+                  audio</span></label>
+              <label class="check-label"><input type="checkbox" id="chk-5"> <span>5. Duration formatted as MM:SS /
+                  HH:MM:SS</span></label>
+              <label class="check-label"><input type="checkbox" id="chk-6"> <span>6. Speaker ID stable
+                  (SPK_xxx)</span></label>
+              <label class="check-label"><input type="checkbox" id="chk-7"> <span>7. Licensing allows intended
+                  use</span></label>
+              <label class="check-label"><input type="checkbox" id="chk-8"> <span>8. Duplicate check
+                  passed</span></label>
+            </div>
+
+            <div class="form-field mt-3">
+              <label for="modal-input-reviewer" class="intake-label required">Revalidated_By</label>
+              <input type="text" id="modal-input-reviewer" class="hub-input" placeholder="Your name or reviewer ID"
+                required>
+            </div>
+
+            <div class="form-field mt-2">
+              <label for="modal-input-notes" class="intake-label">Reviewer Notes (Optional)</label>
+              <input type="text" id="modal-input-notes" class="hub-input" placeholder="Verification notes">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <button class="btn btn-secondary btn-sm" id="btn-modal-save-draft" title="Save changes without approving or rejecting">
+          <i class="fa-solid fa-floppy-disk"></i> Save Content Changes
+        </button>
+        <div class="d-flex gap-2">
+          <button class="btn btn-danger-outline" id="btn-modal-reject">
+            <i class="fa-solid fa-xmark"></i> Reject Candidate
+          </button>
+          <button class="btn btn-primary" id="btn-modal-approve">
+            <i class="fa-solid fa-check-double"></i> Save Changes & Approve
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================== -->
+  <!-- MODAL: REJECTION REASON PROMPT                 -->
+  <!-- ============================================== -->
+  <div id="modal-rejection" class="modal-overlay hidden">
+    <div class="modal-dialog modal-md">
+      <div class="modal-header">
+        <h3 class="modal-title text-danger"><i class="fa-solid fa-ban"></i> Record Rejection Reason</h3>
+        <button class="modal-close-btn" id="modal-rej-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-sm text-muted mb-2">Every rejected record requires a documented reason preserved in internal
+          audit.</p>
+        <div class="form-field">
+          <label for="rej-quick-reason" class="intake-label">Common Rejection Reasons</label>
+          <select id="rej-quick-reason" class="hub-input">
+            <option value="">-- Select standard reason or type custom below --</option>
+            <option value="No spoken Sanskrit terms audible (title/description only).">No spoken Sanskrit terms audible
+              (title/description only)</option>
+            <option value="Duration under 10-minute minimum requirement.">Duration under 10-minute minimum requirement
+            </option>
+            <option value="Accent is not Indian English.">Accent is not Indian English</option>
+            <option value="Audio link is inactive, broken, or restricted.">Audio link is inactive, broken, or restricted
+            </option>
+          </select>
+        </div>
+        <div class="form-field mt-2">
+          <label for="rej-reason-text" class="intake-label required">Detailed Reason</label>
+          <textarea id="rej-reason-text" class="hub-input" rows="3" placeholder="Provide rejection reason..."
+            required></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-rejection">Cancel</button>
+        <button class="btn btn-danger" id="btn-confirm-rejection">Confirm Rejection</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================== -->
+  <!-- MODAL: CSV PREVIEW (DDMMYY)                    -->
+  <!-- ============================================== -->
+  <div id="modal-csv-preview" class="modal-overlay hidden">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3 class="modal-title"><i class="fa-solid fa-file-csv"></i> Approved CSV Export Preview (22 Columns)</h3>
+        <button class="modal-close-btn" id="modal-csv-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="csv-banner-clean">
+          <div><i class="fa-solid fa-circle-check text-emerald"></i> Exact 22 Production Columns &bull; Format
+            DD/MM/YYYY &bull; UTF-8</div>
+          <strong id="preview-record-count">0 Records</strong>
+        </div>
+        <pre class="csv-code-box font-mono" id="csv-preview-content"></pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-close-csv-preview">Close</button>
+        <a href="/api/export/csv" class="btn btn-primary" id="btn-modal-download-csv">
+          <i class="fa-solid fa-file-arrow-down"></i> Download CSV File
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================== -->
+  <!-- MODAL: AUDIT TIMELINE DRAWER                   -->
+  <!-- ============================================== -->
+  <div id="modal-audit-trail" class="modal-overlay hidden">
+    <div class="modal-dialog modal-md">
+      <div class="modal-header">
+        <h3 class="modal-title"><i class="fa-solid fa-clock-rotate-left"></i> Audit History Trail</h3>
+        <button class="modal-close-btn" id="modal-audit-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="audit-record-header" class="mb-3"></div>
+        <div id="audit-timeline-container" class="timeline"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-close-audit">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================== -->
+  <!-- MODAL: LLM ENDPOINT CONFIGURATION (SECTION 7)  -->
+  <!-- ============================================== -->
+  <div id="modal-llm-config" class="modal-overlay hidden">
+    <div class="modal-dialog modal-md">
+      <div class="modal-header">
+        <h3 class="modal-title"><i class="fa-solid fa-brain text-primary"></i> Self-Hosted LLM Endpoint Configuration
+        </h3>
+        <button class="modal-close-btn" id="modal-llm-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-xs text-muted mb-3">
+          Configure the internal self-hosted LLM endpoint. The LLM is invoked <strong>only when the fast pre-filter
+            detects a probable duplicate</strong>.
+        </p>
+
+        <div class="form-field">
+          <label for="cfg-llm-base-url" class="intake-label">LLM Base URL</label>
+          <input type="text" id="cfg-llm-base-url" class="hub-input font-mono"
+            placeholder="http://10.0.0.5:8000 (leave empty for standalone engine)">
+        </div>
+
+        <div class="form-field mt-2">
+          <label for="cfg-llm-endpoint-path" class="intake-label">Inference Endpoint Path</label>
+          <input type="text" id="cfg-llm-endpoint-path" class="hub-input font-mono" placeholder="/v1/chat/completions">
+        </div>
+
+        <div class="form-field mt-2">
+          <label for="cfg-llm-model" class="intake-label">Model Name</label>
+          <input type="text" id="cfg-llm-model" class="hub-input font-mono"
+            placeholder="meta-llama/Llama-3-8B-Instruct">
+        </div>
+
+        <div class="form-field mt-2">
+          <label for="cfg-llm-api-key" class="intake-label">LLM API Key / Bearer Token (Optional)</label>
+          <input type="password" id="cfg-llm-api-key" class="hub-input font-mono" placeholder="••••••••••••••••">
+        </div>
+
+        <div id="llm-test-result-box" class="p-3 mt-3 rounded text-xs hidden"></div>
+
+        <!-- YouTube Data API Verification Card -->
+        <div class="mt-4 p-3 rounded" style="background: #f8fafc; border: 1px solid #cbd5e1;">
+          <div class="flex items-center justify-between"
+            style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <span class="font-semibold text-xs" style="color: #0f172a; font-weight: 600;"><i
+                  class="fa-brands fa-youtube" style="color: #ef4444;"></i> YouTube Data API v3</span>
+              <div class="text-xs text-muted mt-1" id="yt-api-summary-text" style="font-size: 11px;">Checking
+                connection...</div>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-test-yt-api"
+              style="padding: 4px 10px; font-size: 11px;">
+              <i class="fa-solid fa-plug-circle-check"></i> Test YouTube API
+            </button>
+          </div>
+          <div id="yt-test-result-box" class="mt-2 text-xs hidden p-2 rounded"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="btn-close-llm-config">Close</button>
+        <button type="button" class="btn btn-secondary" id="btn-test-llm-endpoint">
+          <i class="fa-solid fa-vial"></i> Test LLM Endpoint
+        </button>
+        <button type="button" class="btn btn-primary" id="btn-save-llm-config">
+          <i class="fa-solid fa-floppy-disk"></i> Save Configuration
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="/static/app.js?v=20261021_rev5"></script>
+</body>
+
+</html>
