@@ -661,7 +661,7 @@ def execute_fast_verification(
     matched_existing_rec = None
     if decision.matched_video_id:
         for m in top_matches:
-            if str(m.get("id")) == decision.matched_video_id:
+            if str(m.get("id")) == decision.matched_video_id or str(m.get("platform_item_id")) == decision.matched_video_id:
                 matched_existing_rec = m
                 break
 

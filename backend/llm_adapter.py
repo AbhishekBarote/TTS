@@ -34,16 +34,36 @@ class LLMConfig:
     """Manages configuration for the self-hosted LLM endpoint."""
     def __init__(self):
         self.base_url = os.getenv("LLM_BASE_URL", "").rstrip("/")
-        self.endpoint_path = os.getenv("LLM_ENDPOINT_PATH", "/v1/chat/completions")
+        self.endpoint_path = os.getenv("LLM_ENDPOINT_PATH", "/chat/completions")
         self.api_key = os.getenv("LLM_API_KEY", "")
-        self.model = os.getenv("LLM_MODEL", "meta-llama/Llama-3-8B-Instruct")
-        self.timeout_seconds = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
+        self.model = os.getenv("LLM_MODEL", "my-model")
+        self.timeout_seconds = int(os.getenv("LLM_TIMEOUT_SECONDS", "25"))
         self.top_k_matches = int(os.getenv("LLM_TOP_K_MATCHES", "3"))
+
+    def get_full_url(self, base_url: Optional[str] = None, endpoint_path: Optional[str] = None) -> str:
+        base = (base_url if base_url is not None else self.base_url).strip().rstrip("/")
+        path = (endpoint_path if endpoint_path is not None else self.endpoint_path).strip()
+        if not base:
+            return ""
+        if not path.startswith("/"):
+            path = "/" + path
+        if base.endswith("/chat/completions"):
+            return base
+        if base.endswith("/v1") and path.startswith("/v1/"):
+            path = path[3:]
+        elif not base.endswith("/v1") and not path.startswith("/v1/"):
+            path = f"/v1{path}"
+        return f"{base}{path}"
+
+    @property
+    def full_endpoint_url(self) -> str:
+        return self.get_full_url()
 
     def to_dict(self, redact_key: bool = True) -> Dict[str, Any]:
         return {
             "base_url": self.base_url,
             "endpoint_path": self.endpoint_path,
+            "endpoint_url": self.full_endpoint_url,
             "model": self.model,
             "timeout_seconds": self.timeout_seconds,
             "top_k_matches": self.top_k_matches,
@@ -145,7 +165,7 @@ class LLMAdapter:
         cfg_model = (override_config.get("model") if override_config and "model" in override_config else llm_config.model).strip()
         cfg_timeout = int(override_config.get("timeout_seconds")) if override_config and override_config.get("timeout_seconds") else llm_config.timeout_seconds
 
-        url = f"{cfg_base_url}{cfg_endpoint_path}"
+        url = llm_config.get_full_url(base_url=cfg_base_url, endpoint_path=cfg_endpoint_path)
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "AudioResearchHub/1.2 (Duplicate-Detector)"
@@ -203,9 +223,9 @@ class LLMAdapter:
             "max_tokens": 300
         }
 
-        # Fast response handling: 1 attempt with capped 4s timeout
+        # Response handling: 1 attempt with configured timeout (minimum 10s for LLM processing)
         max_retries = 1
-        effective_timeout = min(cfg_timeout, 5)
+        effective_timeout = max(10, cfg_timeout)
         last_error = None
 
         for attempt in range(max_retries):
@@ -228,7 +248,7 @@ class LLMAdapter:
                     clean_text = " ".join(re.sub(r'<[^>]+>', ' ', resp.text[:400]).split())
                     last_error = f"HTTP {resp.status_code}: {clean_text[:120]}" if clean_text else f"HTTP {resp.status_code}"
             except requests.exceptions.Timeout:
-                last_error = f"Request timed out after {cfg_timeout}s"
+                last_error = f"Request timed out after {effective_timeout}s"
             except requests.exceptions.RequestException as e:
                 last_error = f"Network error: {str(e)}"
 
@@ -264,12 +284,16 @@ class LLMAdapter:
             else:
                 content = json.dumps(data)
 
-            # Try to extract JSON from markdown fences if any
             content = content.strip()
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
+            # Extract JSON from markdown fences or bracket patterns
+            m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+            if m:
+                content = m.group(1).strip()
+            else:
+                start = content.find('{')
+                end = content.rfind('}')
+                if start != -1 and end != -1 and end > start:
+                    content = content[start:end+1].strip()
 
             parsed = json.loads(content)
             status = str(parsed.get("status", "POTENTIAL_DUPLICATE")).upper()

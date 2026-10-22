@@ -30,7 +30,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from backend.duplicate import canonicalize_url as base_canonicalize_url, TRACKING_PARAMS
-from backend.llm_adapter import llm_config, LLMDecision
+from backend.llm_adapter import llm_config, LLMAdapter, LLMDecision
 
 logger = logging.getLogger(__name__)
 
@@ -794,7 +794,7 @@ def verify_with_self_hosted_llm(
     # Case 1: Remote endpoint configured via environment / LLMConfig
     if llm_config.base_url:
         try:
-            url = f"{llm_config.base_url}{llm_config.endpoint_path}"
+            url = llm_config.full_endpoint_url
             headers = {
                 "Content-Type": "application/json",
                 "User-Agent": "WebResearchHub/2.0 (Web-Deduplicator)"
@@ -854,7 +854,7 @@ def verify_with_self_hosted_llm(
                 "max_tokens": 300
             }
 
-            resp = requests.post(url, headers=headers, json=payload, timeout=min(llm_config.timeout_seconds, 6))
+            resp = requests.post(url, headers=headers, json=payload, timeout=max(10, llm_config.timeout_seconds))
             latency = (time.perf_counter() - start_time) * 1000.0
             if resp.status_code == 200:
                 data = resp.json()

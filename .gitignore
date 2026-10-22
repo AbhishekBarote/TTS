@@ -19,3 +19,8 @@ ENV/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Media storage
+static/media/raw/
+static/media/segments/
+static/media/_tmp/

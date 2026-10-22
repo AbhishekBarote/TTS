@@ -186,6 +186,31 @@ def init_db():
     );
     """)
 
+    # 6. Audio Segments table (Section 3 of implementation.md)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS audio_segments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        segment_index INTEGER NOT NULL,
+        file_name TEXT NOT NULL,
+        audio_path TEXT NOT NULL,
+        relative_url TEXT NOT NULL,
+        transcription TEXT NOT NULL,
+        original_transcription TEXT NOT NULL,
+        duration_seconds REAL DEFAULT 0.0,
+        language TEXT DEFAULT 'english',
+        gender TEXT DEFAULT 'auto',
+        validation_status TEXT DEFAULT 'PENDING',
+        rejection_reason TEXT,
+        validated_by TEXT,
+        validated_at TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+    );
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_segments_record_id ON audio_segments(record_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_segments_status ON audio_segments(validation_status);")
+
     conn.commit()
 
     # Seed illustrative examples if database is brand new

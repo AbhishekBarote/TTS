@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
   <!-- Custom Stylesheet -->
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20261022_rev10">
 </head>
 
 <body class="hub-body">
@@ -60,6 +60,11 @@
           <i class="fa-solid fa-database"></i>
           <span>Approved Dataset</span>
           <span class="sidebar-badge-green" id="side-approved-badge">0</span>
+        </button>
+        <button class="nav-item" id="side-tab-pipeline" data-tab="pipeline-view">
+          <i class="fa-solid fa-bolt-lightning text-primary"></i>
+          <span>Track Pipeline</span>
+          <span class="sidebar-badge-blue" id="side-pipeline-badge" style="display:none;">0</span>
         </button>
         <button class="nav-item" id="side-tab-all" data-tab="history-view">
           <i class="fa-solid fa-table-list"></i>
@@ -564,6 +569,8 @@
                     <th>Assigned_to</th>
                     <th>Handover</th>
                     <th>Audit</th>
+                    <th>Pipeline</th>
+
                   </tr>
                 </thead>
                 <tbody id="approved-tbody"></tbody>
@@ -576,6 +583,64 @@
                 Audio_Link, Text_Link, Description, Dataset Name, Gender, Before_Processing_Duration,
                 After_Processing_Duration, Total_files, Researched_By, Assigned_to, Status, Data_type, Data_available,
                 Speakers_ID, Speaker/Channel_Name, Accent, Licensing, Handover, Remark).</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================== -->
+        <!-- VIEW: AUDIO PROCESSING PIPELINE TRACKER       -->
+        <!-- ============================================== -->
+        <section id="pipeline-view" class="view-panel">
+          <div class="card p-4">
+            <div class="panel-header-clean" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
+              <div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <span class="pipeline-header-icon" style="display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;background:rgba(56,189,248,0.12);border-radius:8px;border:1px solid rgba(56,189,248,0.3);"><i class="fa-solid fa-bolt-lightning text-primary"></i></span>
+                  <h3 class="panel-h3" style="margin:0;">Audio Processing Pipeline — Live Tracker</h3>
+                </div>
+                <p class="text-sm text-muted" style="margin-top:4px;">
+                  Real-time tracking of audio downloading, BS-Roformer denoise, Silero VAD, and Whisper Large-v3 transcription.
+                </p>
+              </div>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-pipeline-jobs" onclick="loadPipelineJobs(true)">
+                  <i class="fa-solid fa-rotate"></i> Refresh
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" onclick="switchTab('approved-view')">
+                  <i class="fa-solid fa-plus"></i> Process from Approved
+                </button>
+              </div>
+            </div>
+
+            <!-- Filter tabs row -->
+            <div class="status-tabs-row mt-3">
+              <button class="pjob-tab-btn active" data-pfilter="ALL" onclick="filterPipelineJobs('ALL')">
+                All Jobs (<span id="pj-count-all">0</span>)
+              </button>
+              <button class="pjob-tab-btn" data-pfilter="RUNNING" onclick="filterPipelineJobs('RUNNING')">
+                <i class="fa-solid fa-spinner fa-spin text-primary"></i> Running (<span id="pj-count-running">0</span>)
+              </button>
+              <button class="pjob-tab-btn" data-pfilter="DONE" onclick="filterPipelineJobs('DONE')">
+                <i class="fa-solid fa-check text-emerald"></i> Done (<span id="pj-count-done">0</span>)
+              </button>
+              <button class="pjob-tab-btn" data-pfilter="FAILED" onclick="filterPipelineJobs('FAILED')">
+                <i class="fa-solid fa-triangle-exclamation text-rose"></i> Failed (<span id="pj-count-failed">0</span>)
+              </button>
+            </div>
+
+            <!-- Grid container for job cards -->
+            <div class="pipeline-cards-grid mt-4" id="pipeline-jobs-grid"></div>
+
+            <!-- Empty state -->
+            <div id="pj-empty-state" class="hidden" style="text-align:center;padding:60px 20px;">
+              <i class="fa-solid fa-waveform-lines fa-3x" style="color:#475569;margin-bottom:16px;"></i>
+              <h4 style="color:#94a3b8;font-size:1.1rem;margin-bottom:8px;">No Audio Pipeline Jobs Yet</h4>
+              <p class="text-sm text-muted" style="max-width:440px;margin:0 auto 20px;">
+                Go to the <strong>Approved Dataset</strong> tab and click <strong>"⚡ Run Pipeline"</strong> on any approved recording to initiate downloading and server processing.
+              </p>
+              <button class="btn btn-primary btn-sm" onclick="switchTab('approved-view')">
+                <i class="fa-solid fa-arrow-right"></i> Go to Approved Dataset
+              </button>
             </div>
           </div>
         </section>
@@ -1026,7 +1091,95 @@
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
 
-  <script src="/static/app.js?v=20261021_rev5"></script>
+  <!-- ============================================== -->
+  <!-- MODAL: SEGMENT VALIDATION STUDIO               -->
+  <!-- ============================================== -->
+  <div id="modal-segment-validation" class="modal-overlay hidden">
+    <div class="modal-dialog" style="max-width:920px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
+      <div class="modal-header">
+        <div class="modal-header-info">
+          <i class="fa-solid fa-headphones text-primary fa-lg"></i>
+          <div>
+            <h3 class="modal-title" id="seg-modal-title">Segment Validation Studio</h3>
+            <span class="text-xs text-muted" id="seg-modal-subtitle">Record #— | Speaker: —</span>
+          </div>
+        </div>
+        <button class="modal-close-btn" id="seg-modal-close">&times;</button>
+      </div>
+
+      <!-- Pipeline Progress shown while processing -->
+      <div id="seg-pipeline-progress-wrap" class="pipeline-progress-wrap hidden">
+        <div class="pipeline-stage-label" id="seg-pipeline-stage-label">⏳ Processing…</div>
+        <div class="pipeline-stage-sub" id="seg-pipeline-stage-sub">Sending audio to processing server</div>
+        <div class="pipeline-progress-bar">
+          <div class="pipeline-progress-fill" id="seg-pipeline-progress-fill" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- Segments Area -->
+      <div id="seg-validation-area" class="hidden" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+        <!-- Sticky Summary + Controls bar -->
+        <div class="seg-summary-bar" id="seg-summary-bar">
+          <span class="seg-stat-pill seg-stat-accepted" id="seg-count-accepted">
+            <i class="fa-solid fa-check"></i> 0 Accepted (0:00)
+          </span>
+          <span class="seg-stat-pill seg-stat-rejected" id="seg-count-rejected">
+            <i class="fa-solid fa-xmark"></i> 0 Rejected
+          </span>
+          <span class="seg-stat-pill seg-stat-pending" id="seg-count-pending">
+            <i class="fa-regular fa-clock"></i> 0 Pending
+          </span>
+          <span class="seg-stat-pill seg-stat-total" id="seg-count-total">
+            <i class="fa-solid fa-layer-group"></i> 0 Total
+          </span>
+          <div class="seg-bulk-btns">
+            <button class="seg-bulk-btn seg-bulk-accept" id="btn-accept-all">
+              <i class="fa-solid fa-check-double"></i> Accept All
+            </button>
+            <button class="seg-bulk-btn seg-bulk-reject" id="btn-reject-all">
+              <i class="fa-solid fa-ban"></i> Reject All
+            </button>
+          </div>
+          <div class="seg-speed-control">
+            <i class="fa-solid fa-gauge"></i>
+            <label for="seg-speed-select" style="font-size:12px;">Speed:</label>
+            <select id="seg-speed-select">
+              <option value="0.75">0.75×</option>
+              <option value="1.0" selected>1.0×</option>
+              <option value="1.25">1.25×</option>
+              <option value="1.5">1.5×</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Scrollable segment cards -->
+        <div class="seg-list-area" id="seg-list-area" style="overflow-y:auto;flex:1;"></div>
+
+        <!-- Finalize bar -->
+        <div class="seg-finalize-bar">
+          <div class="seg-finalize-summary" id="seg-finalize-summary">
+            Select and validate segments, then finalize.
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <button class="btn btn-secondary" id="btn-seg-cancel">Cancel</button>
+            <button class="btn-finalize" id="btn-finalize-validation" disabled>
+              <i class="fa-solid fa-circle-check"></i>
+              Save &amp; Finalize Record
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Empty state -->
+      <div id="seg-empty-state" class="hidden" style="padding:40px;text-align:center;">
+        <i class="fa-solid fa-waveform-lines fa-3x" style="color:#cbd5e1;margin-bottom:16px;"></i>
+        <h4 style="color:#64748b;">No segments found</h4>
+        <p class="text-sm text-muted">Run the pipeline first to generate and validate audio segments.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=20261022_rev11"></script>
 </body>
 
-</html>
+</html>

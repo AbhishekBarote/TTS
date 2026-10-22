@@ -52,4 +52,4 @@ if __name__ == "__main__":
     print("=" * 70)
 
     # Bind to 0.0.0.0 so all network devices on the same Wi-Fi/LAN can connect
-    uvicorn.run("backend.app:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=port, reload=True)

@@ -9,6 +9,7 @@ import io
 import csv
 import json
 import time
+import asyncio
 import requests
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -22,7 +23,7 @@ try:
 except ImportError:
     pass
 
-from fastapi import FastAPI, HTTPException, Query, status, Request
+from fastapi import FastAPI, HTTPException, Query, status, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -754,7 +755,7 @@ def test_llm_endpoint_api(req: LLMTestRequest):
         override["api_key"] = req.api_key
     if req.model is not None:
         override["model"] = req.model
-    override["timeout_seconds"] = min(int(req.timeout_seconds), 4) if req.timeout_seconds is not None else 4
+    override["timeout_seconds"] = int(req.timeout_seconds) if req.timeout_seconds is not None else llm_config.timeout_seconds
 
     active_base_url = (override.get("base_url") if "base_url" in override else llm_config.base_url).strip().rstrip("/")
     active_path = (override.get("endpoint_path") if "endpoint_path" in override else llm_config.endpoint_path).strip()
@@ -778,7 +779,7 @@ def test_llm_endpoint_api(req: LLMTestRequest):
     decision = LLMAdapter.evaluate(sample_candidate, sample_match, override_config=override if override else None)
     
     is_remote = bool(active_base_url)
-    endpoint_display = f"{active_base_url}{active_path}" if is_remote else "Standalone Semantic Engine"
+    endpoint_display = llm_config.get_full_url(base_url=active_base_url, endpoint_path=active_path) if is_remote else "Standalone Semantic Engine"
     success = not bool(decision.error_state) if is_remote else True
 
     return {
@@ -897,8 +898,11 @@ def list_records(
     params = []
 
     if status_filter and status_filter.upper() != "ALL":
-        query += " AND status = ?"
-        params.append(status_filter.upper())
+        if status_filter.upper() == "APPROVED":
+            query += " AND status IN ('APPROVED', 'PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED')"
+        else:
+            query += " AND status = ?"
+            params.append(status_filter.upper())
 
     if source and source.upper() != "ALL":
         query += " AND source LIKE ?"
@@ -1266,7 +1270,7 @@ def export_approved_csv():
 
     cursor.execute("""
         SELECT * FROM records
-        WHERE status = 'APPROVED'
+        WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED')
         ORDER BY research_date DESC, id DESC
     """)
     rows = [dict(r) for r in cursor.fetchall()]
@@ -1353,7 +1357,7 @@ def preview_approved_csv():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT * FROM records WHERE status = 'APPROVED' ORDER BY research_date DESC, id DESC
+        SELECT * FROM records WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED') ORDER BY research_date DESC, id DESC
     """)
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
@@ -1448,10 +1452,10 @@ def get_stats():
     cursor.execute("SELECT status, COUNT(*) as count FROM records GROUP BY status")
     status_counts = {r["status"]: r["count"] for r in cursor.fetchall()}
 
-    cursor.execute("SELECT COUNT(DISTINCT speakers_id) as count FROM records WHERE status = 'APPROVED'")
+    cursor.execute("SELECT COUNT(DISTINCT speakers_id) as count FROM records WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED')")
     approved_speakers = cursor.fetchone()["count"]
 
-    cursor.execute("SELECT SUM(duration_seconds) as total_sec FROM records WHERE status = 'APPROVED'")
+    cursor.execute("SELECT SUM(duration_seconds) as total_sec FROM records WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED')")
     total_approved_sec = cursor.fetchone()["total_sec"] or 0
 
     total_h = total_approved_sec // 3600
@@ -1474,10 +1478,11 @@ def get_stats():
     conn.close()
     approved_hours_dec = round(total_approved_sec / 3600.0, 1)
     total_all = sum(status_counts.values())
+    approved_count = sum(status_counts.get(s, 0) for s in ("APPROVED", "PIPELINE_PROCESSING", "VALIDATION_READY", "COMPLETED"))
 
     return {
         "pending_revalidation": status_counts.get("PENDING_REVALIDATION", 0),
-        "approved": status_counts.get("APPROVED", 0),
+        "approved": approved_count,
         "rejected_by_researcher": status_counts.get("REJECTED_BY_RESEARCHER", 0),
         "rejected_at_revalidation": status_counts.get("REJECTED_AT_REVALIDATION", 0),
         "pending_research": status_counts.get("PENDING_RESEARCH", 0),
@@ -1512,3 +1517,293 @@ def get_next_speaker_id():
 
     next_id = f"SPK_{max_num + 1:03d}"
     return {"next_speaker_id": next_id}
+
+
+# ==============================================================================
+# AUDIO PIPELINE: DOWNLOAD + PROCESSING SERVER + SEGMENT VALIDATION
+# ==============================================================================
+
+from backend.pipeline_service import (
+    run_full_pipeline,
+    get_job_status,
+    get_all_pipeline_jobs,
+    get_segments,
+    validate_segment,
+    finalize_record_validation,
+    ensure_audio_segments_table,
+)
+
+# Ensure audio_segments table exists on startup
+try:
+    ensure_audio_segments_table()
+except Exception as _e:
+    pass  # table creation is idempotent, continue
+
+# Mount the media directory for browser audio playback
+MEDIA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "media")
+os.makedirs(MEDIA_DIR, exist_ok=True)
+
+
+@app.get("/api/pipeline/jobs")
+def get_pipeline_jobs_api():
+    """
+    Returns all audio processing pipeline jobs with step progress,
+    timestamps, duration, and status for the Track Pipeline tab.
+    """
+    return get_all_pipeline_jobs()
+
+
+@app.post("/api/pipeline/run/{record_id}")
+async def pipeline_run_api(
+    record_id: int,
+    background_tasks: BackgroundTasks,
+    force_redownload: bool = Query(False, description="Force re-download even if WAV already exists")
+):
+    """
+    Triggers selective audio download + endpoint processing for one approved record.
+    Runs in a background task so the API call returns immediately.
+    Synchronously seeds the pipeline_jobs row so it is immediately visible in the Tracker.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, status, audio_link, speakers_id, speaker_channel_name, gender, description, platform_item_id
+        FROM records WHERE id = ?
+    """, (record_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Record {record_id} not found")
+
+    rec = dict(row)
+    current_status = rec["status"]
+
+    # Check if a background worker is already actively processing this record right now
+    from backend.pipeline_service import _pipeline_jobs, upsert_pipeline_job, format_job_timestamp
+    active_in_mem = _pipeline_jobs.get(record_id, {})
+    is_actively_running = (
+        active_in_mem.get("stage") in ("DOWNLOADING", "PROCESSING", "EXTRACTING")
+    )
+    if is_actively_running:
+        return {
+            "message": "Pipeline is already actively processing for this record",
+            "record_id": record_id,
+            "job": get_job_status(record_id)
+        }
+
+    # Prepare metadata for immediate display
+    url = rec.get("audio_link") or ""
+    item_id = rec.get("platform_item_id") or ""
+    desc = (rec.get("description") or "").strip()
+    gender = (rec.get("gender") or "auto").lower()
+    gen = gender[0].upper() if gender else "U"
+    if item_id:
+        file_name = f"{item_id}_{gen}.wav"
+    elif desc:
+        clean_desc = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in desc[:35]).strip("_")
+        file_name = f"{clean_desc}_{gen}.wav"
+    else:
+        file_name = f"audio_rec_{record_id}_{gen}.wav"
+
+    speaker_id = rec.get("speakers_id") or rec.get("speaker_channel_name") or f"spk_{record_id}"
+    speaker_name = rec.get("speaker_channel_name") or rec.get("speakers_id") or ""
+    dt_now = datetime.now()
+
+    # Synchronously insert/update pipeline_jobs so it is IMMEDIATELY queryable
+    job = upsert_pipeline_job(
+        record_id=record_id,
+        job_id=f"job_{record_id:04d}",
+        file_name=file_name,
+        audio_link=url,
+        speaker_id=speaker_id,
+        speaker_name=speaker_name,
+        gender=gender,
+        denoise_model="BS-Roformer",
+        asr_model="Whisper Large-v3",
+        language="English",
+        stage="DOWNLOADING",
+        step_id="validate",
+        step_index=0,
+        total_steps=6,
+        progress_pct=5,
+        step_name="Starting audio download...",
+        started_at=dt_now.isoformat(),
+        started_at_display=format_job_timestamp(dt_now),
+        elapsed_seconds=0,
+        took_formatted="0s",
+        error=None
+    )
+
+    from backend.pipeline_service import update_record_status
+    update_record_status(record_id, "PIPELINE_PROCESSING")
+
+    print(f"\n⚡ [Pipeline Triggered] Record #{record_id}: {file_name} (Speaker: {speaker_id})", flush=True)
+
+    async def _run():
+        try:
+            print(f"▶ [Pipeline Worker] Starting background processing for Record #{record_id}...", flush=True)
+            res = await run_full_pipeline(record_id=record_id, force_redownload=force_redownload)
+            if res.get("success"):
+                print(f"✅ [Pipeline Worker] Record #{record_id} completed successfully! Segments ready for validation.", flush=True)
+            else:
+                print(f"❌ [Pipeline Worker] Record #{record_id} failed: {res.get('error')}", flush=True)
+        except Exception as exc:
+            import logging, traceback
+            tb = traceback.format_exc()
+            logging.getLogger(__name__).error(f"Pipeline failed for record {record_id}: {exc}\n{tb}")
+            print(f"❌ [Pipeline Worker Error] Record #{record_id}: {exc}\n{tb}", flush=True)
+
+    background_tasks.add_task(_run)
+    return {
+        "message": "Pipeline started in background",
+        "record_id": record_id,
+        "poll_url": f"/api/pipeline/status/{record_id}",
+        "job": job
+    }
+
+
+@app.get("/api/pipeline/status/{record_id}")
+def pipeline_status_api(record_id: int):
+    """
+    Returns live pipeline stage and progress for a specific record.
+    Stages: IDLE | DOWNLOADING | PROCESSING | EXTRACTING | DONE | FAILED
+    """
+    return get_job_status(record_id)
+
+
+@app.get("/api/records/{record_id}/segments")
+def get_record_segments_api(record_id: int):
+    """
+    Returns all audio segments for a record, including playback URLs,
+    transcriptions, duration, and validation status.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, speakers_id, speaker_channel_name, description FROM records WHERE id = ?", (record_id,))
+    rec_row = cursor.fetchone()
+    if not rec_row:
+        conn.close()
+        raise HTTPException(status_code=404, detail=f"Record {record_id} not found")
+    spk_id = rec_row["speakers_id"] or ""
+    spk_name = rec_row["speaker_channel_name"] or spk_id
+    rec_desc = rec_row["description"] or ""
+    conn.close()
+
+    segments = get_segments(record_id)
+    total_accepted_s = sum(
+        float(s.get("duration_seconds") or 0)
+        for s in segments if s.get("validation_status") == "ACCEPTED"
+    )
+    total_pending_s = sum(
+        float(s.get("duration_seconds") or 0)
+        for s in segments if s.get("validation_status") == "PENDING"
+    )
+    total_rejected_s = sum(
+        float(s.get("duration_seconds") or 0)
+        for s in segments if s.get("validation_status") == "REJECTED"
+    )
+
+    def _fmt(sec):
+        s = int(sec)
+        return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+
+    return {
+        "record_id": record_id,
+        "speaker_id": spk_id,
+        "speaker_name": spk_name,
+        "description": rec_desc,
+        "total_segments": len(segments),
+        "accepted": sum(1 for s in segments if s.get("validation_status") == "ACCEPTED"),
+        "rejected": sum(1 for s in segments if s.get("validation_status") == "REJECTED"),
+        "pending": sum(1 for s in segments if s.get("validation_status") == "PENDING"),
+        "total_accepted_duration": _fmt(total_accepted_s),
+        "total_pending_duration": _fmt(total_pending_s),
+        "total_rejected_duration": _fmt(total_rejected_s),
+        "segments": segments
+    }
+
+
+@app.post("/api/segments/{segment_id}/validate")
+def validate_segment_api(segment_id: int, req: dict):
+    """
+    Updates validation decision for a single segment.
+    Body: { status: 'ACCEPTED'|'REJECTED'|'PENDING',
+            transcription: str (optional, edited text),
+            rejection_reason: str (optional),
+            validated_by: str (optional) }
+    """
+    allowed = {"ACCEPTED", "REJECTED", "PENDING"}
+    seg_status = str(req.get("status", "PENDING")).upper()
+    if seg_status not in allowed:
+        raise HTTPException(status_code=400, detail=f"Status must be one of {allowed}")
+
+    updated = validate_segment(
+        segment_id=segment_id,
+        status=seg_status,
+        transcription=req.get("transcription"),
+        rejection_reason=req.get("rejection_reason"),
+        validated_by=req.get("validated_by")
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Segment {segment_id} not found")
+    return updated
+
+
+@app.post("/api/segments/batch-validate")
+def batch_validate_segments_api(req: dict):
+    """
+    Accepts/rejects all segments for a record in one call.
+    Body: { record_id: int, status: 'ACCEPTED'|'REJECTED', validated_by: str }
+    """
+    record_id = req.get("record_id")
+    seg_status = str(req.get("status", "ACCEPTED")).upper()
+    validated_by = req.get("validated_by", "System")
+    if not record_id:
+        raise HTTPException(status_code=400, detail="record_id is required")
+    if seg_status not in {"ACCEPTED", "REJECTED"}:
+        raise HTTPException(status_code=400, detail="status must be ACCEPTED or REJECTED")
+
+    segments = get_segments(record_id)
+    updated = []
+    for seg in segments:
+        result = validate_segment(
+            segment_id=seg["id"],
+            status=seg_status,
+            transcription=None,
+            rejection_reason=None,
+            validated_by=validated_by
+        )
+        updated.append(result)
+    return {"record_id": record_id, "updated": len(updated), "status": seg_status}
+
+
+@app.post("/api/records/{record_id}/finalize-validation")
+def finalize_validation_api(record_id: int, req: dict):
+    """
+    Finalizes segment validation for a record:
+    - Counts accepted segments
+    - Computes after_processing_duration
+    - Updates record status to COMPLETED
+    - Sets total_files, completion_date
+    Body: { finalized_by: str }
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, status FROM records WHERE id = ?", (record_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Record {record_id} not found")
+    if row["status"] not in ("VALIDATION_READY", "APPROVED", "PIPELINE_PROCESSING", "COMPLETED"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Record must be in VALIDATION_READY state (current: {row['status']})"
+        )
+
+    finalized_by = req.get("finalized_by", "Researcher")
+    result = finalize_record_validation(record_id=record_id, finalized_by=finalized_by)
+    return result

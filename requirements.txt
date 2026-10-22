@@ -19,3 +19,7 @@ numpy==1.26.4
 
 # Environment Configuration
 python-dotenv==1.2.4
+
+# Audio Download & Async HTTP Client
+yt-dlp>=2026.10.0
+httpx>=0.27.0

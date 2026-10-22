@@ -54,6 +54,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Initial data load
   refreshAllData();
+  loadApprovedDataset();
 });
 
 /* ==========================================================================
@@ -151,12 +152,20 @@ window.switchTab = function(targetId) {
     if (targetId === "dashboard-view") titleElem.textContent = "Dashboard Overview";
     else if (targetId === "review-view") titleElem.textContent = "Revalidation Review Queue";
     else if (targetId === "approved-view") titleElem.textContent = "Approved Dataset (DDMMYY)";
+    else if (targetId === "pipeline-view") titleElem.textContent = "Audio Processing Pipeline Tracker";
     else if (targetId === "history-view") titleElem.textContent = "All Database Records & Audit History";
   }
 
   // View-specific data loads
   if (targetId === "review-view") loadReviewQueue();
   if (targetId === "approved-view") loadApprovedDataset();
+  if (targetId === "pipeline-view") {
+    _pipelineFilter = 'ALL';
+    document.querySelectorAll('[data-pfilter]').forEach(b => {
+      b.classList.toggle('active', b.getAttribute('data-pfilter') === 'ALL');
+    });
+    loadPipelineJobs();
+  }
   if (targetId === "history-view") loadAllRecords();
 };
 
@@ -1382,7 +1391,7 @@ function formatDateSlash(dateStr) {
 }
 
     if (records.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="16" class="text-center text-muted" style="padding: 2.5rem;">No approved records found matching your filters.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="17" class="text-center text-muted" style="padding: 2.5rem;">No approved records found matching your filters.</td></tr>`;
       return;
     }
 
@@ -1390,6 +1399,7 @@ function formatDateSlash(dateStr) {
       const dateSlash = formatDateSlash(r.research_date);
       const spkChannel = r.speaker_channel_name || r.channel_name || r.speakers_id;
       const assignedTo = r.assigned_to || r.revalidated_by || r.researched_by || '—';
+      const pipelineBtn = _buildPipelineBtnHtml(r);
 
       return `
         <tr>
@@ -1419,6 +1429,7 @@ function formatDateSlash(dateStr) {
               <i class="fa-solid fa-clock-rotate-left"></i>
             </button>
           </td>
+          <td>${pipelineBtn}</td>
         </tr>
       `;
     }).join("");
@@ -2785,3 +2796,785 @@ window.inspectInWebPipeline = function(targetUrl) {
   }
   performDuplicateCheck(targetUrl);
 };
+
+/* ==========================================================================
+   PIPELINE MODULE: SELECTIVE DOWNLOAD + PROCESSING + SEGMENT VALIDATION
+   ========================================================================== */
+
+// In-memory pipeline status cache  {recordId: {stage, progress_pct, message, ...}}
+const _pipelineStatus = {};
+// Active polling intervals  {recordId: intervalId}
+const _pipelinePolls = {};
+// Currently open validation modal's record ID
+let _segModalRecordId = null;
+// Hidden audio element for segment playback
+let _segAudio = null;
+let _segCurrentlyPlaying = null;
+
+// ── Utility: build Pipeline column button HTML ────────────────────────────────
+function _buildPipelineBtnHtml(r) {
+  const st = r.status || '';
+  if (st === 'COMPLETED') {
+    return `<button class="pipeline-btn pipeline-btn-completed" onclick="openSegmentModal(${r.id})" title="View validated segments">
+      <i class="fa-solid fa-check-circle"></i> Completed
+    </button>`;
+  }
+  if (st === 'VALIDATION_READY') {
+    return `<button class="pipeline-btn pipeline-btn-ready" onclick="openSegmentModal(${r.id})" title="Validate segments">
+      <i class="fa-solid fa-headphones"></i> Validate Segments
+    </button>`;
+  }
+  if (st === 'PIPELINE_PROCESSING') {
+    return `<button class="pipeline-btn pipeline-btn-processing" onclick="openSegmentModal(${r.id})" title="View live progress">
+      <i class="fa-solid fa-spinner fa-spin"></i> Processing…
+    </button>`;
+  }
+  if (st === 'PIPELINE_FAILED') {
+    return `<button class="pipeline-btn pipeline-btn-failed" onclick="triggerPipeline(${r.id})" title="Retry pipeline">
+      <i class="fa-solid fa-rotate-right"></i> Retry Pipeline
+    </button>`;
+  }
+  // Default: APPROVED / other — show trigger button
+  return `<button class="pipeline-btn pipeline-btn-idle" onclick="triggerPipeline(${r.id})" title="Download & process this recording">
+    <i class="fa-solid fa-bolt"></i> Run Pipeline
+  </button>`;
+}
+
+// ── PIPELINE TRACKER MODULE (EXACT MATCH TO REFERENCE SCREENSHOT) ───────────
+let _pipelineJobsData = [];
+let _pipelineFilter = 'ALL';
+let _pipelineGlobalTimer = null;
+
+const PIPELINE_STEP_DEFS = [
+  { id: 'validate', label: 'Validate' },
+  { id: 'convert', label: 'Convert' },
+  { id: 'denoise', label: 'Denoise' },
+  { id: 'vad', label: 'VAD' },
+  { id: 'asr', label: 'ASR' },
+  { id: 'zip', label: 'Zip' }
+];
+
+function format_took_js(sec) {
+  const s = Math.floor(sec || 0);
+  if (s >= 3600) {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return `Took ${h}h ${m}m ${s % 60}s`;
+  }
+  return `Took ${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function _updatePipelineBadges() {
+  const total = _pipelineJobsData.length;
+  const running = _pipelineJobsData.filter(j => j.stage === 'DOWNLOADING' || j.stage === 'PROCESSING' || j.stage === 'EXTRACTING').length;
+  const done = _pipelineJobsData.filter(j => j.stage === 'DONE').length;
+  const failed = _pipelineJobsData.filter(j => j.stage === 'FAILED').length;
+
+  const elAll = document.getElementById('pj-count-all');
+  const elRunning = document.getElementById('pj-count-running');
+  const elDone = document.getElementById('pj-count-done');
+  const elFailed = document.getElementById('pj-count-failed');
+  if (elAll) elAll.textContent = total;
+  if (elRunning) elRunning.textContent = running;
+  if (elDone) elDone.textContent = done;
+  if (elFailed) elFailed.textContent = failed;
+
+  const sideBadge = document.getElementById('side-pipeline-badge');
+  if (sideBadge) {
+    if (running > 0) {
+      sideBadge.textContent = running;
+      sideBadge.style.display = 'inline-block';
+    } else {
+      sideBadge.style.display = 'none';
+    }
+  }
+}
+
+window.filterPipelineJobs = function(filter) {
+  _pipelineFilter = filter;
+  document.querySelectorAll('[data-pfilter]').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-pfilter') === filter);
+  });
+  _renderPipelineJobs();
+};
+
+window.loadPipelineJobs = async function(manual = false) {
+  try {
+    const res = await fetch('/api/pipeline/jobs');
+    if (!res.ok) throw new Error('Failed to fetch pipeline jobs');
+    _pipelineJobsData = await res.json();
+    _updatePipelineBadges();
+    _renderPipelineJobs();
+
+    // Auto-polling while any job is in progress
+    const hasActive = _pipelineJobsData.some(j => 
+      j.stage === 'DOWNLOADING' || j.stage === 'PROCESSING' || j.stage === 'EXTRACTING'
+    );
+    if (hasActive) {
+      if (!_pipelineGlobalTimer) {
+        _pipelineGlobalTimer = setInterval(() => {
+          if (state.activeTab === 'pipeline-view') {
+            loadPipelineJobs();
+          } else {
+            clearInterval(_pipelineGlobalTimer);
+            _pipelineGlobalTimer = null;
+          }
+        }, 2500);
+      }
+    } else {
+      if (_pipelineGlobalTimer) {
+        clearInterval(_pipelineGlobalTimer);
+        _pipelineGlobalTimer = null;
+      }
+    }
+    if (manual) showToast('Pipeline tracker updated', 'info');
+  } catch (err) {
+    console.error('Failed to load pipeline jobs:', err);
+    if (manual) showToast('Failed to refresh pipeline jobs', 'error');
+  }
+};
+
+function _renderPipelineJobs() {
+  const grid = document.getElementById('pipeline-jobs-grid');
+  const emptyState = document.getElementById('pj-empty-state');
+  if (!grid) return;
+
+  let filtered = _pipelineJobsData;
+  if (_pipelineFilter === 'RUNNING') {
+    filtered = filtered.filter(j => j.stage === 'DOWNLOADING' || j.stage === 'PROCESSING' || j.stage === 'EXTRACTING');
+  } else if (_pipelineFilter === 'DONE') {
+    filtered = filtered.filter(j => j.stage === 'DONE');
+  } else if (_pipelineFilter === 'FAILED') {
+    filtered = filtered.filter(j => j.stage === 'FAILED');
+  }
+
+  if (filtered.length === 0) {
+    grid.innerHTML = '';
+    emptyState?.classList.remove('hidden');
+    return;
+  }
+  emptyState?.classList.add('hidden');
+
+  grid.innerHTML = filtered.map(job => {
+    const isRunning = (job.stage === 'DOWNLOADING' || job.stage === 'PROCESSING' || job.stage === 'EXTRACTING');
+    const isDone = (job.stage === 'DONE');
+    const isFailed = (job.stage === 'FAILED');
+    const pct = Math.max(0, Math.min(100, parseInt(job.progress_pct || 0)));
+
+    let cardCls = 'pjob-card';
+    if (isRunning) cardCls += ' pjob-card-running';
+    if (isFailed) cardCls += ' pjob-card-failed';
+
+    let badgeHtml = '';
+    if (isDone) {
+      badgeHtml = `<span class="pjob-badge pjob-badge-done"><i class="fa-solid fa-check"></i> Done</span>`;
+    } else if (job.stage === 'DOWNLOADING') {
+      badgeHtml = `<span class="pjob-badge pjob-badge-downloading"><i class="fa-solid fa-cloud-arrow-down fa-bounce"></i> Downloading</span>`;
+    } else if (isRunning) {
+      badgeHtml = `<span class="pjob-badge pjob-badge-running"><i class="fa-solid fa-spinner fa-spin"></i> Running</span>`;
+    } else if (isFailed) {
+      badgeHtml = `<span class="pjob-badge pjob-badge-failed"><i class="fa-solid fa-xmark"></i> Failed</span>`;
+    } else {
+      badgeHtml = `<span class="pjob-badge"><i class="fa-regular fa-clock"></i> Queued</span>`;
+    }
+
+    const currentStepIdx = parseInt(job.step_index || 0);
+    const stepperHtml = PIPELINE_STEP_DEFS.map((s, idx) => {
+      let nodeCls = '';
+      if (isDone || idx < currentStepIdx) {
+        nodeCls = 'completed';
+      } else if (idx === currentStepIdx && isRunning) {
+        nodeCls = 'active';
+      }
+      return `
+        <div class="pjob-step-node ${nodeCls}">
+          <div class="pjob-step-dot"></div>
+          <span class="pjob-step-label">${s.label}</span>
+        </div>
+      `;
+    }).join('');
+
+    let statusText = job.step_name || (isDone ? 'Finished' : 'Initializing…');
+    if (isDone) statusText = 'Finished';
+
+    let timeLabel = job.took_formatted || (job.elapsed_seconds ? format_took_js(job.elapsed_seconds) : '');
+    if (isRunning && !timeLabel) timeLabel = 'In progress…';
+
+    let actionBtn = '';
+    if (isDone || job.record_status === 'VALIDATION_READY') {
+      const segCountText = job.segments_count ? ` (${job.segments_count})` : '';
+      actionBtn = `
+        <button class="pjob-action-btn btn-pjob-validate" onclick="openSegmentModal(${job.record_id})" title="Review segmented audio clips">
+          <i class="fa-solid fa-headphones"></i> Validate Segments${segCountText}
+        </button>
+      `;
+    } else if (job.record_status === 'COMPLETED') {
+      actionBtn = `
+        <button class="pjob-action-btn btn-pjob-validate" style="background:#059669;" onclick="openSegmentModal(${job.record_id})">
+          <i class="fa-solid fa-circle-check"></i> Validated (${job.after_processing_duration || 'Done'})
+        </button>
+      `;
+    } else if (isFailed) {
+      actionBtn = `
+        <button class="pjob-action-btn btn-pjob-retry" onclick="triggerPipeline(${job.record_id})" title="Retry processing">
+          <i class="fa-solid fa-rotate-right"></i> Retry
+        </button>
+      `;
+    }
+
+    const shortJobId = (job.job_id || ('job_' + job.record_id)).substring(0, 8);
+    const audioName = job.file_name || `Record #${job.record_id}`;
+
+    return `
+      <div class="${cardCls}" id="pjob-card-${job.record_id}">
+        <!-- Top header row -->
+        <div class="pjob-header">
+          <span class="pjob-title" title="${escapeHtml(audioName)}">${escapeHtml(audioName)}</span>
+          ${badgeHtml}
+        </div>
+
+        <!-- Sub row: Job ID + Timestamp + Speaker -->
+        <div class="pjob-sub">
+          <span class="job-id">${escapeHtml(shortJobId)}</span>
+          <span>${escapeHtml(job.started_at_display || '')}</span>
+          ${job.speaker_id ? `<span>• ${escapeHtml(job.speaker_id)}</span>` : ''}
+        </div>
+
+        <!-- Tag pills row -->
+        <div class="pjob-tags">
+          <span class="pjob-tag pjob-tag-highlight"><i class="fa-solid fa-sliders text-xs"></i> Full pipeline</span>
+          <span class="pjob-tag">Denoise: ${escapeHtml(job.denoise_model || 'BS-Roformer')}</span>
+          <span class="pjob-tag">${escapeHtml(job.language || 'English')}</span>
+          <span class="pjob-tag">${escapeHtml(job.asr_model || 'Whisper Large-v3')}</span>
+          <span class="pjob-tag">${escapeHtml(job.gender || 'auto')}</span>
+        </div>
+
+        <!-- Progress Slider with circular thumb -->
+        <div class="pjob-slider-wrap">
+          <div class="pjob-slider-fill" style="width: ${pct}%;">
+            <span class="pjob-slider-thumb"></span>
+          </div>
+        </div>
+
+        <!-- 6-step horizontal stepper (Validate, Convert, Denoise, VAD, ASR, Zip) -->
+        <div class="pjob-stepper">
+          ${stepperHtml}
+        </div>
+
+        <!-- Status row: step name + percentage -->
+        <div class="pjob-status-row">
+          <span class="pjob-status-text">${escapeHtml(statusText)}</span>
+          <span class="pjob-pct">${pct}%</span>
+        </div>
+
+        <!-- Sub-footer: Took time + Action Button -->
+        <div class="pjob-subfooter">
+          <span class="pjob-time">${escapeHtml(timeLabel)}</span>
+          <div>${actionBtn}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── Trigger pipeline for a record ─────────────────────────────────────────────
+window.triggerPipeline = async function(recordId) {
+  // 1. Immediately show on screen that it is processing!
+  const btns = document.querySelectorAll(`button[onclick*="triggerPipeline(${recordId})"]`);
+  btns.forEach(b => {
+    b.className = 'pipeline-btn pipeline-btn-processing';
+    b.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing…';
+  });
+
+  showToast(`⚡ Initiating audio download & pipeline for Record #${recordId}…`, 'info');
+
+  try {
+    const res = await fetch(`/api/pipeline/run/${recordId}`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed to start pipeline');
+
+    showToast(`⚡ Audio processing started! Displaying live track in Track Pipeline tab…`, 'success');
+    
+    // 2. On new tab the processing of the audios must be displayed i.e track!
+    switchTab('pipeline-view');
+
+    // Reload approved dataset in background to ensure status sync
+    setTimeout(() => { if (typeof loadApprovedDataset === 'function') loadApprovedDataset(); }, 1500);
+  } catch (err) {
+    showToast(`Failed to start pipeline: ${err.message}`, 'error');
+    btns.forEach(b => {
+      b.className = 'pipeline-btn pipeline-btn-failed';
+      b.innerHTML = '<i class="fa-solid fa-rotate-right"></i> Retry Pipeline';
+    });
+  }
+};
+
+// ── Open Segment Validation Studio modal ──────────────────────────────────────
+window.openSegmentModal = async function(recordId) {
+  _segModalRecordId = recordId;
+  const modal = document.getElementById('modal-segment-validation');
+  modal.classList.remove('hidden');
+
+  // Show appropriate inner content based on current pipeline state
+  await _refreshSegmentModal(recordId);
+};
+
+async function _refreshSegmentModal(recordId) {
+  // Check pipeline status first
+  let jobStatus;
+  try {
+    const res = await fetch(`/api/pipeline/status/${recordId}`);
+    jobStatus = await res.json();
+  } catch (_) {
+    jobStatus = { stage: 'IDLE', progress_pct: 0, message: '' };
+  }
+
+  const stage = jobStatus.stage || 'IDLE';
+  const progressWrap = document.getElementById('seg-pipeline-progress-wrap');
+  const validationArea = document.getElementById('seg-validation-area');
+  const emptyState = document.getElementById('seg-empty-state');
+
+  document.getElementById('seg-modal-title').textContent = `Segment Validation Studio — Record #${recordId}`;
+
+  if (stage === 'DOWNLOADING' || stage === 'PROCESSING' || stage === 'EXTRACTING') {
+    // Show progress UI
+    progressWrap.classList.remove('hidden');
+    validationArea.classList.add('hidden');
+    emptyState.classList.add('hidden');
+
+    const stageLabels = {
+      DOWNLOADING: '⬇️ Downloading Audio…',
+      PROCESSING: '⚙️ Processing on Server…',
+      EXTRACTING: '📦 Extracting Segments…'
+    };
+    document.getElementById('seg-pipeline-stage-label').textContent = stageLabels[stage] || stage;
+    document.getElementById('seg-pipeline-stage-sub').textContent = jobStatus.message || '';
+    document.getElementById('seg-pipeline-progress-fill').style.width = (jobStatus.progress_pct || 0) + '%';
+
+    // Poll until complete
+    if (!_pipelinePolls[recordId]) {
+      _pipelinePolls[recordId] = setInterval(async () => {
+        if (_segModalRecordId !== recordId) {
+          clearInterval(_pipelinePolls[recordId]);
+          delete _pipelinePolls[recordId];
+          return;
+        }
+        await _refreshSegmentModal(recordId);
+      }, 2000);
+    }
+    return;
+  }
+
+  // Stop polling
+  if (_pipelinePolls[recordId]) {
+    clearInterval(_pipelinePolls[recordId]);
+    delete _pipelinePolls[recordId];
+  }
+
+  // Load segments from API
+  let segData;
+  try {
+    const res = await fetch(`/api/records/${recordId}/segments`);
+    segData = await res.json();
+  } catch (_) {
+    segData = { segments: [] };
+  }
+
+  const segments = segData.segments || [];
+
+  if (segments.length === 0) {
+    progressWrap.classList.add('hidden');
+    validationArea.classList.add('hidden');
+    emptyState.classList.remove('hidden');
+    document.getElementById('seg-modal-subtitle').textContent =
+      stage === 'FAILED' ? `⚠️ Pipeline failed: ${jobStatus.error || 'unknown error'}` : 'No segments — run pipeline first';
+    return;
+  }
+
+  // Render segment cards
+  progressWrap.classList.add('hidden');
+  emptyState.classList.add('hidden');
+  validationArea.classList.remove('hidden');
+
+  const speakerDisplay = segData.speaker_name || segData.speaker_id || '';
+  const subElem = document.getElementById('seg-modal-subtitle');
+  if (subElem) {
+    subElem.textContent = `Record #${recordId}${speakerDisplay ? ' • Speaker: ' + speakerDisplay : ''} • ${segments.length} Segments`;
+  }
+
+  _renderSegments(segments, recordId);
+  _updateSegSummary(segments);
+}
+
+// ── Render segment cards ───────────────────────────────────────────────────────
+function _renderSegments(segments, recordId) {
+  const list = document.getElementById('seg-list-area');
+  list.innerHTML = segments.map(seg => {
+    const st = (seg.validation_status || 'PENDING').toUpperCase();
+    const dur = parseFloat(seg.duration_seconds || 0);
+    const durStr = _fmtSeconds(dur);
+    const stClass = st === 'ACCEPTED' ? 'seg-accepted' : st === 'REJECTED' ? 'seg-rejected' : '';
+    const stBadge = st === 'ACCEPTED' ? 'accepted' : st === 'REJECTED' ? 'rejected' : 'pending';
+    const stLabel = st === 'ACCEPTED' ? '✓ Accepted' : st === 'REJECTED' ? '✕ Rejected' : '⏳ Pending';
+    const cleanUrl = (seg.relative_url || '').replace(/\\/g, '/');
+
+    return `
+      <div class="seg-card ${stClass}" id="seg-card-${seg.id}" data-seg-id="${seg.id}" data-record-id="${recordId}">
+        <div class="seg-card-header">
+          <span class="seg-index-badge">#${(seg.segment_index || 0) + 1}</span>
+          <span class="seg-duration-badge">${durStr}</span>
+          <span class="seg-status-badge ${stBadge}" id="seg-status-${seg.id}">${stLabel}</span>
+          <span class="text-xs text-muted" style="font-family:var(--font-mono);">${escapeHtml(seg.file_name || '')}</span>
+          <div class="seg-decision-btns">
+            <button class="seg-btn-accept${st === 'ACCEPTED' ? ' active' : ''}" onclick="_segDecide(${seg.id}, 'ACCEPTED')" title="Accept (A)">
+              <i class="fa-solid fa-check"></i> Keep
+            </button>
+            <button class="seg-btn-reject${st === 'REJECTED' ? ' active' : ''}" onclick="_segDecide(${seg.id}, 'REJECTED')" title="Reject (R)">
+              <i class="fa-solid fa-xmark"></i> Cut
+            </button>
+          </div>
+        </div>
+
+        <div class="seg-player-row">
+          <button class="seg-play-btn" id="seg-playbtn-${seg.id}" onclick="_segPlay(${seg.id}, '${escapeHtml(cleanUrl)}')" title="Play / Pause">
+            <i class="fa-solid fa-play" id="seg-playicon-${seg.id}"></i>
+          </button>
+          <div class="seg-waveform" id="seg-waveform-${seg.id}" onclick="_segSeek(event, ${seg.id}, '${escapeHtml(cleanUrl)}')">
+            <div class="seg-waveform-fill" id="seg-fill-${seg.id}"></div>
+          </div>
+          <span class="seg-time-label" id="seg-time-${seg.id}">0:00 / ${durStr}</span>
+        </div>
+
+        <textarea class="seg-transcript" id="seg-tx-${seg.id}"
+          placeholder="Transcription (edit to correct Sanskrit spelling…)"
+          oninput="_segTxEdit(${seg.id}, this)"
+        >${escapeHtml(seg.transcription || '')}</textarea>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── Update summary stats bar ───────────────────────────────────────────────────
+function _updateSegSummary(segments) {
+  const accepted = segments.filter(s => s.validation_status === 'ACCEPTED');
+  const rejected = segments.filter(s => s.validation_status === 'REJECTED');
+  const pending  = segments.filter(s => s.validation_status === 'PENDING');
+  const acceptedSec = accepted.reduce((s, x) => s + parseFloat(x.duration_seconds || 0), 0);
+
+  document.getElementById('seg-count-accepted').innerHTML =
+    `<i class="fa-solid fa-check"></i> ${accepted.length} Accepted (${_fmtSeconds(acceptedSec)})`;
+  document.getElementById('seg-count-rejected').innerHTML =
+    `<i class="fa-solid fa-xmark"></i> ${rejected.length} Rejected`;
+  document.getElementById('seg-count-pending').innerHTML =
+    `<i class="fa-regular fa-clock"></i> ${pending.length} Pending`;
+  document.getElementById('seg-count-total').innerHTML =
+    `<i class="fa-solid fa-layer-group"></i> ${segments.length} Total`;
+
+  const finalizeBtn = document.getElementById('btn-finalize-validation');
+  const finalizeSummary = document.getElementById('seg-finalize-summary');
+
+  if (accepted.length > 0) {
+    finalizeBtn.disabled = false;
+    finalizeSummary.innerHTML = `Ready to finalize: <strong>${accepted.length} segments (${_fmtSeconds(acceptedSec)})</strong> will be saved.`;
+  } else {
+    finalizeBtn.disabled = true;
+    finalizeSummary.textContent = 'Accept at least 1 segment to enable finalization.';
+  }
+}
+
+// ── Segment decision (Accept/Reject) ──────────────────────────────────────────
+window._segDecide = async function(segId, status) {
+  const validatedBy = localStorage.getItem('researched_by') || 'Researcher';
+  try {
+    const res = await fetch(`/api/segments/${segId}/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, validated_by: validatedBy })
+    });
+    if (!res.ok) throw new Error('Validation request failed');
+    const updated = await res.json();
+
+    // Update card appearance
+    const card = document.getElementById(`seg-card-${segId}`);
+    const badge = document.getElementById(`seg-status-${segId}`);
+    if (card) {
+      card.classList.remove('seg-accepted', 'seg-rejected');
+      if (status === 'ACCEPTED') card.classList.add('seg-accepted');
+      if (status === 'REJECTED') card.classList.add('seg-rejected');
+    }
+    if (badge) {
+      const labels = { ACCEPTED: '✓ Accepted', REJECTED: '✕ Rejected', PENDING: '⏳ Pending' };
+      const classes = { ACCEPTED: 'accepted', REJECTED: 'rejected', PENDING: 'pending' };
+      badge.textContent = labels[status];
+      badge.className = `seg-status-badge ${classes[status]}`;
+    }
+    // Update active state on buttons
+    const acceptBtn = card?.querySelector('.seg-btn-accept');
+    const rejectBtn = card?.querySelector('.seg-btn-reject');
+    if (acceptBtn) acceptBtn.classList.toggle('active', status === 'ACCEPTED');
+    if (rejectBtn) rejectBtn.classList.toggle('active', status === 'REJECTED');
+
+    // Refresh summary counts by re-fetching segments
+    const dataRes = await fetch(`/api/records/${updated.record_id}/segments`);
+    const data = await dataRes.json();
+    _updateSegSummary(data.segments || []);
+  } catch (err) {
+    showToast('Failed to update segment: ' + err.message, 'error');
+  }
+};
+
+// ── Segment transcript edit ────────────────────────────────────────────────────
+window._segTxEdit = async function(segId, textarea) {
+  textarea.classList.add('seg-transcript-edited');
+  clearTimeout(textarea._saveTimer);
+  textarea._saveTimer = setTimeout(async () => {
+    const validatedBy = localStorage.getItem('researched_by') || 'Researcher';
+    try {
+      await fetch(`/api/segments/${segId}/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'ACCEPTED', transcription: textarea.value, validated_by: validatedBy })
+      });
+      textarea.classList.remove('seg-transcript-edited');
+    } catch (_) {}
+  }, 1500);
+};
+
+// ── Audio playback ─────────────────────────────────────────────────────────────
+window._segPlay = function(segId, relUrl) {
+  if (!_segAudio) {
+    _segAudio = new Audio();
+    _segAudio.addEventListener('timeupdate', () => {
+      if (_segCurrentlyPlaying) {
+        const pct = _segAudio.duration > 0 ? (_segAudio.currentTime / _segAudio.duration) * 100 : 0;
+        const fill = document.getElementById(`seg-fill-${_segCurrentlyPlaying}`);
+        const time = document.getElementById(`seg-time-${_segCurrentlyPlaying}`);
+        if (fill) fill.style.width = pct + '%';
+        if (time) {
+          const cur = _fmtSeconds(_segAudio.currentTime);
+          const tot = _fmtSeconds(_segAudio.duration || 0);
+          time.textContent = `${cur} / ${tot}`;
+        }
+      }
+    });
+    _segAudio.addEventListener('ended', () => {
+      if (_segCurrentlyPlaying) {
+        const icon = document.getElementById(`seg-playicon-${_segCurrentlyPlaying}`);
+        const btn = document.getElementById(`seg-playbtn-${_segCurrentlyPlaying}`);
+        if (icon) icon.className = 'fa-solid fa-play';
+        if (btn) btn.classList.remove('playing');
+        _segCurrentlyPlaying = null;
+      }
+    });
+    _segAudio.addEventListener('error', (e) => {
+      console.error("Audio playback error:", e, _segAudio.error);
+      if (_segCurrentlyPlaying) {
+        const icon = document.getElementById(`seg-playicon-${_segCurrentlyPlaying}`);
+        const btn = document.getElementById(`seg-playbtn-${_segCurrentlyPlaying}`);
+        if (icon) icon.className = 'fa-solid fa-play';
+        if (btn) btn.classList.remove('playing');
+        _segCurrentlyPlaying = null;
+      }
+      showToast('Audio playback failed — could not load audio file.', 'warning');
+    });
+  }
+
+  const speedSel = document.getElementById('seg-speed-select');
+  const speed = speedSel ? parseFloat(speedSel.value) : 1.0;
+
+  // Toggle pause if currently playing this exact segment
+  if (_segCurrentlyPlaying === segId && !_segAudio.paused) {
+    _segAudio.pause();
+    document.getElementById(`seg-playicon-${segId}`)?.setAttribute('class', 'fa-solid fa-play');
+    document.getElementById(`seg-playbtn-${segId}`)?.classList.remove('playing');
+    return;
+  }
+
+  // Resume if paused on this exact segment
+  if (_segCurrentlyPlaying === segId && _segAudio.paused) {
+    _segAudio.playbackRate = speed;
+    _segAudio.play().then(() => {
+      document.getElementById(`seg-playicon-${segId}`)?.setAttribute('class', 'fa-solid fa-pause');
+      document.getElementById(`seg-playbtn-${segId}`)?.classList.add('playing');
+    }).catch(err => {
+      console.error("Resume playback failed:", err);
+      showToast('Audio playback failed: ' + err.message, 'warning');
+    });
+    return;
+  }
+
+  // Stop previous segment if another was playing
+  if (_segCurrentlyPlaying && _segCurrentlyPlaying !== segId) {
+    _segAudio.pause();
+    document.getElementById(`seg-playicon-${_segCurrentlyPlaying}`)?.setAttribute('class', 'fa-solid fa-play');
+    document.getElementById(`seg-playbtn-${_segCurrentlyPlaying}`)?.classList.remove('playing');
+  }
+
+  _segCurrentlyPlaying = segId;
+  _segAudio.src = relUrl;
+  _segAudio.playbackRate = speed;
+  _segAudio.play().then(() => {
+    document.getElementById(`seg-playicon-${segId}`)?.setAttribute('class', 'fa-solid fa-pause');
+    document.getElementById(`seg-playbtn-${segId}`)?.classList.add('playing');
+  }).catch(err => {
+    console.error("Audio play failed:", err);
+    showToast('Audio playback failed — segment file may not exist yet.', 'warning');
+    document.getElementById(`seg-playicon-${segId}`)?.setAttribute('class', 'fa-solid fa-play');
+    document.getElementById(`seg-playbtn-${segId}`)?.classList.remove('playing');
+    _segCurrentlyPlaying = null;
+  });
+};
+
+// ── Seek in waveform bar ───────────────────────────────────────────────────────
+window._segSeek = function(event, segId, relUrl) {
+  const bar = document.getElementById(`seg-waveform-${segId}`);
+  if (!bar) return;
+  const rect = bar.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+
+  if (_segCurrentlyPlaying !== segId) {
+    // Start playing this segment and seek once ready
+    _segPlay(segId, relUrl);
+    const onLoaded = () => {
+      if (_segAudio && _segAudio.duration) {
+        _segAudio.currentTime = ratio * _segAudio.duration;
+      }
+      _segAudio?.removeEventListener('loadedmetadata', onLoaded);
+    };
+    _segAudio?.addEventListener('loadedmetadata', onLoaded);
+    return;
+  }
+
+  if (_segAudio && _segAudio.duration) {
+    _segAudio.currentTime = ratio * _segAudio.duration;
+  }
+};
+
+// ── Speed control ──────────────────────────────────────────────────────────────
+document.getElementById('seg-speed-select')?.addEventListener('change', (e) => {
+  if (_segAudio) _segAudio.playbackRate = parseFloat(e.target.value);
+});
+
+// ── Bulk accept / reject ───────────────────────────────────────────────────────
+document.getElementById('btn-accept-all')?.addEventListener('click', async () => {
+  if (!_segModalRecordId) return;
+  const validatedBy = localStorage.getItem('researched_by') || 'Researcher';
+  await fetch('/api/segments/batch-validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ record_id: _segModalRecordId, status: 'ACCEPTED', validated_by: validatedBy })
+  });
+  await _refreshSegmentModal(_segModalRecordId);
+});
+
+document.getElementById('btn-reject-all')?.addEventListener('click', async () => {
+  if (!_segModalRecordId) return;
+  const validatedBy = localStorage.getItem('researched_by') || 'Researcher';
+  await fetch('/api/segments/batch-validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ record_id: _segModalRecordId, status: 'REJECTED', validated_by: validatedBy })
+  });
+  await _refreshSegmentModal(_segModalRecordId);
+});
+
+// ── Finalize validation ────────────────────────────────────────────────────────
+document.getElementById('btn-finalize-validation')?.addEventListener('click', async () => {
+  if (!_segModalRecordId) return;
+  const finalizedBy = localStorage.getItem('researched_by') || 'Researcher';
+  const btn = document.getElementById('btn-finalize-validation');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…';
+
+  try {
+    const res = await fetch(`/api/records/${_segModalRecordId}/finalize-validation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ finalized_by: finalizedBy })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Finalization failed');
+
+    showToast(`✅ Record #${_segModalRecordId} finalized! ${data.accepted_count} segments (${data.after_processing_duration}) saved.`, 'success');
+    document.getElementById('modal-segment-validation').classList.add('hidden');
+    _cleanupSegModal();
+    loadApprovedDataset();
+  } catch (err) {
+    showToast('Finalization failed: ' + err.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-circle-check"></i> Save &amp; Finalize Record';
+  }
+});
+
+// ── Modal close ────────────────────────────────────────────────────────────────
+function _cleanupSegModal() {
+  if (_segAudio) { _segAudio.pause(); _segAudio = null; }
+  _segCurrentlyPlaying = null;
+  if (_pipelinePolls[_segModalRecordId]) {
+    clearInterval(_pipelinePolls[_segModalRecordId]);
+    delete _pipelinePolls[_segModalRecordId];
+  }
+  _segModalRecordId = null;
+}
+
+document.getElementById('seg-modal-close')?.addEventListener('click', () => {
+  document.getElementById('modal-segment-validation').classList.add('hidden');
+  _cleanupSegModal();
+});
+document.getElementById('btn-seg-cancel')?.addEventListener('click', () => {
+  document.getElementById('modal-segment-validation').classList.add('hidden');
+  _cleanupSegModal();
+});
+document.getElementById('modal-segment-validation')?.addEventListener('click', (e) => {
+  if (e.target === document.getElementById('modal-segment-validation')) {
+    document.getElementById('modal-segment-validation').classList.add('hidden');
+    _cleanupSegModal();
+  }
+});
+
+// ── Keyboard shortcuts inside modal ───────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (!_segModalRecordId) return;
+  const modal = document.getElementById('modal-segment-validation');
+  if (modal.classList.contains('hidden')) return;
+
+  // Space = play/pause
+  if (e.code === 'Space' && _segCurrentlyPlaying) {
+    e.preventDefault();
+    const fill = document.getElementById(`seg-fill-${_segCurrentlyPlaying}`);
+    if (_segAudio && !_segAudio.paused) {
+      _segAudio.pause();
+      document.getElementById(`seg-playicon-${_segCurrentlyPlaying}`)?.setAttribute('class', 'fa-solid fa-play');
+      document.getElementById(`seg-playbtn-${_segCurrentlyPlaying}`)?.classList.remove('playing');
+    } else if (_segAudio) {
+      _segAudio.play();
+      document.getElementById(`seg-playicon-${_segCurrentlyPlaying}`)?.setAttribute('class', 'fa-solid fa-pause');
+      document.getElementById(`seg-playbtn-${_segCurrentlyPlaying}`)?.classList.add('playing');
+    }
+  }
+});
+
+// ── Helper: format seconds to M:SS ────────────────────────────────────────────
+function _fmtSeconds(sec) {
+  const s = Math.floor(sec || 0);
+  if (s >= 3600) {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    return `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  }
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+// Check pipeline status on startup
+try {
+  fetch('/api/pipeline/jobs')
+    .then(r => r.json())
+    .then(jobs => {
+      if (Array.isArray(jobs)) {
+        _pipelineJobsData = jobs;
+        _updatePipelineBadges();
+      }
+    })
+    .catch(() => {});
+} catch (_) {}
