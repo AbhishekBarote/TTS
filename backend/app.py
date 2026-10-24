@@ -46,6 +46,10 @@ from backend.speaker_ledger import (
     sync_speaker_duration_ledger
 )
 from backend.fast_verifier import execute_fast_verification, fetch_essential_content
+from backend.licensing import (
+    fetch_and_detect_youtube_licensing, analyze_licensing_evidence,
+    ALL_CATEGORIES, SCREENING_POLICY, UNKNOWN
+)
 from backend.models import (
     DuplicateCheckRequest, DuplicateCheckResponse,
     RecordCreateRequest, RecordRevalidateRequest, RecordUpdateRequest,
@@ -161,6 +165,36 @@ def check_duplicate_api(req: DuplicateCheckRequest):
     )
 
     meta = res.get("metadata") or {}
+    platform = res.get("platform", "Web")
+    platform_item_id = res.get("platform_item_id")
+
+    # Automatic License Detection (Requirements 1-7)
+    lic_info = None
+    try:
+        if platform == "YouTube" or "youtube.com" in url or "youtu.be" in url:
+            lic_info = fetch_and_detect_youtube_licensing(
+                url=url,
+                platform_item_id=platform_item_id,
+                candidate_description=req.description,
+                candidate_title=req.title
+            )
+        else:
+            combined_sources = {
+                "title": meta.get("title") or req.title or "",
+                "description": meta.get("description") or req.description or "",
+                "metadata_license": meta.get("license") or ""
+            }
+            lic_info = analyze_licensing_evidence(combined_sources)
+            lic_info["url"] = url
+            lic_info["video_id"] = platform_item_id
+    except Exception as lic_err:
+        logger.warning(f"License detection error for {url}: {lic_err}")
+        lic_info = analyze_licensing_evidence({})
+        lic_info["url"] = url
+        lic_info["video_id"] = platform_item_id
+
+    meta["licensing_info"] = lic_info
+
     raw_duration = req.before_processing_duration or meta.get("duration") or "00:00:00"
     formatted_dur = format_duration(raw_duration)
     cand_dur_seconds = duration_to_seconds(formatted_dur)
@@ -198,7 +232,7 @@ def check_duplicate_api(req: DuplicateCheckRequest):
         reason=res.get("reason", ""),
         evidence_fields=res.get("evidence_fields", []),
         confidence=res.get("confidence", 0.0),
-        prefilter_triggered=res.get("endpoint_version") not in ("fast-exact-index", "fast-content-fetcher", "fast-url-validator"),
+        prefilter_triggered=res.get("endpoint_version") not in ("fast-exact-index", "fast-prefilter", "fast-content-fetcher", "fast-url-validator"),
         llm_called=res.get("endpoint_version") not in ("fast-exact-index", "fast-prefilter", "fast-content-fetcher", "fast-url-validator"),
         request_latency_ms=res.get("latency_ms", 0.0),
         endpoint_version=res.get("endpoint_version"),
@@ -208,8 +242,28 @@ def check_duplicate_api(req: DuplicateCheckRequest):
         existing_record=res.get("existing_record"),
         similar_records=res.get("similar_records", []),
         metadata=meta,
-        speaker_duration_check=spk_check
+        speaker_duration_check=spk_check,
+        licensing_info=lic_info
     )
+
+
+@app.post("/api/detect-licensing")
+def detect_licensing_post(payload: Dict[str, Any]):
+    """Explicitly detect licensing for a given YouTube URL or general webpage."""
+    url = (payload.get("url") or "").strip()
+    html_content = payload.get("html") or payload.get("html_content")
+    if not url:
+        raise HTTPException(status_code=400, detail="URL cannot be empty")
+    return fetch_and_detect_youtube_licensing(url=url, html_content=html_content)
+
+
+@app.get("/api/detect-licensing")
+def detect_licensing_get(url: str = Query(...)):
+    """Explicitly detect licensing for a given YouTube URL or general webpage via GET."""
+    url = url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL cannot be empty")
+    return fetch_and_detect_youtube_licensing(url=url)
 
 
 @app.get("/api/fetch-metadata")
@@ -402,6 +456,14 @@ def create_record(req: RecordCreateRequest):
     handover = req.handover or "No"
     remark = req.remark or ""
 
+    # Licensing Detection & Verification Fields (Requirements 5-8)
+    detected_lic = req.detected_license or req.licensing.strip()
+    det_source = req.license_detection_source or "manual"
+    ver_status = req.license_verification_status or "NEEDS_VERIFICATION"
+    rev_decision = req.license_reviewer_decision or "PENDING"
+    conflict_det = 1 if req.license_conflict_detected else 0
+    screen_guidance = req.license_screening_guidance or ""
+
     try:
         cursor.execute("""
             INSERT INTO records (
@@ -413,8 +475,10 @@ def create_record(req: RecordCreateRequest):
                 completion_date, text_link, dataset_name, after_processing_duration,
                 total_files, assigned_to, data_type_augmentation_status, data_available,
                 speaker_channel_name, handover, remark,
+                detected_license, license_detection_source, license_verification_status,
+                license_reviewer_decision, license_conflict_detected, license_screening_guidance,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             req.research_date or datetime.now().strftime("%Y-%m-%d"),
             source_name,
@@ -451,6 +515,12 @@ def create_record(req: RecordCreateRequest):
             channel_name,
             handover,
             remark,
+            detected_lic,
+            det_source,
+            ver_status,
+            rev_decision,
+            conflict_det,
+            screen_guidance,
             now_iso,
             now_iso
         ))
@@ -627,6 +697,14 @@ def revalidate_record(record_id: int, req: RecordRevalidateRequest):
     data_avail_val = req.data_available or record.get("data_available") or "Lightining AV/HF"
     remark_val = req.notes or rejection_reason or record.get("remark") or ""
 
+    rev_decision = req.license_reviewer_decision or ("APPROVED" if new_status == "APPROVED" else ("REJECTED" if "REJECTED" in new_status else record.get("license_reviewer_decision", "PENDING")))
+    ver_status = req.license_verification_status or ("VERIFIED" if new_status == "APPROVED" else record.get("license_verification_status", "NEEDS_VERIFICATION"))
+    lic_evidence = req.licensing_evidence if req.licensing_evidence is not None else (record.get("licensing_evidence") or "")
+    det_lic = req.detected_license or record.get("detected_license") or licensing
+    det_source = req.license_detection_source or record.get("license_detection_source") or "manual"
+    conflict_det = 1 if req.license_conflict_detected is True else (0 if req.license_conflict_detected is False else (1 if record.get("license_conflict_detected") else 0))
+    screen_guidance = req.license_screening_guidance or record.get("license_screening_guidance") or ""
+
     cursor.execute("""
         UPDATE records
         SET status = ?, revalidated_by = ?, rejection_reason = ?, updated_at = ?,
@@ -636,6 +714,9 @@ def revalidate_record(record_id: int, req: RecordRevalidateRequest):
             before_processing_duration = ?, duration_seconds = ?,
             speakers_id = ?, speaker_channel_name = ?,
             gender = ?, accent = ?, source = ?, licensing = ?,
+            licensing_evidence = ?, detected_license = ?, license_detection_source = ?,
+            license_verification_status = ?, license_reviewer_decision = ?,
+            license_conflict_detected = ?, license_screening_guidance = ?,
             sanskrit_evidence = ?, description = ?
         WHERE id = ?
     """, (
@@ -646,6 +727,9 @@ def revalidate_record(record_id: int, req: RecordRevalidateRequest):
         formatted_dur, dur_seconds,
         spk_id, spk_chan,
         gender, accent, source, licensing,
+        lic_evidence, det_lic, det_source,
+        ver_status, rev_decision,
+        conflict_det, screen_guidance,
         sanskrit_evidence, description,
         record_id
     ))
@@ -888,9 +972,10 @@ def get_decision_audit_logs(limit: int = 50):
 def list_records(
     status_filter: Optional[str] = Query(None, alias="status"),
     search: Optional[str] = None,
-    source: Optional[str] = None
+    source: Optional[str] = None,
+    researched_by: Optional[str] = None
 ):
-    """List records with optional status, source, or text filtering."""
+    """List records with optional status, source, researcher, or text filtering."""
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -907,6 +992,10 @@ def list_records(
     if source and source.upper() != "ALL":
         query += " AND source LIKE ?"
         params.append(f"%{source}%")
+
+    if researched_by and researched_by.strip() and researched_by.upper() != "ALL":
+        query += " AND researched_by LIKE ?"
+        params.append(f"%{researched_by.strip()}%")
 
     if search:
         search_like = f"%{search.strip()}%"
@@ -990,7 +1079,11 @@ def update_record(record_id: int, req: RecordUpdateRequest):
         UPDATE records SET
             research_date = ?, source = ?, audio_link = ?, canonical_url = ?, platform_item_id = ?,
             description = ?, gender = ?, before_processing_duration = ?, duration_seconds = ?,
-            accent = ?, licensing = ?, licensing_evidence = ?, sanskrit_evidence = ?,
+            accent = ?, licensing = ?, licensing_evidence = ?,
+            detected_license = ?, license_detection_source = ?,
+            license_verification_status = ?, license_reviewer_decision = ?,
+            license_conflict_detected = ?, license_screening_guidance = ?,
+            sanskrit_evidence = ?,
             speakers_id = ?, researched_by = ?, status = ?, rejection_reason = ?, updated_at = ?
         WHERE id = ?
     """, (
@@ -1006,6 +1099,12 @@ def update_record(record_id: int, req: RecordUpdateRequest):
         req.accent or current["accent"],
         req.licensing or current["licensing"],
         req.licensing_evidence if req.licensing_evidence is not None else current["licensing_evidence"],
+        req.detected_license or current["detected_license"],
+        req.license_detection_source or current["license_detection_source"],
+        req.license_verification_status or current["license_verification_status"],
+        req.license_reviewer_decision or current["license_reviewer_decision"],
+        1 if req.license_conflict_detected is True else (0 if req.license_conflict_detected is False else current["license_conflict_detected"]),
+        req.license_screening_guidance if req.license_screening_guidance is not None else current["license_screening_guidance"],
         req.sanskrit_evidence if req.sanskrit_evidence is not None else current["sanskrit_evidence"],
         req.speakers_id or current["speakers_id"],
         req.researched_by or current["researched_by"],

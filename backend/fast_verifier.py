@@ -497,6 +497,13 @@ def execute_fast_verification(
     content_hash = fetched.get("content_hash", "")
     title = fetched.get("title", "")
     author = fetched.get("author", "")
+    if not title and candidate_description:
+        title = candidate_description.split("\n")[0].strip()
+    if not author and candidate_description:
+        for line in candidate_description.splitlines():
+            if "channel" in line.lower() and ":" in line:
+                author = line.split(":", 1)[1].strip()
+                break
 
     # Step 4: Fast Exact Match Check Against Indexed DB
     conn = get_connection()

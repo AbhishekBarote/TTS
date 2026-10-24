@@ -33,6 +33,7 @@ class DuplicateCheckResponse(BaseModel):
     similar_records: List[Dict[str, Any]] = []
     metadata: Optional[Dict[str, Any]] = None
     speaker_duration_check: Optional[Dict[str, Any]] = None
+    licensing_info: Optional[Dict[str, Any]] = None
 
 class RecordCreateRequest(BaseModel):
     research_date: str
@@ -64,6 +65,12 @@ class RecordCreateRequest(BaseModel):
     speaker_channel_name: Optional[str] = ""
     handover: Optional[str] = "No"
     remark: Optional[str] = ""
+    detected_license: Optional[str] = None
+    license_detection_source: Optional[str] = None
+    license_verification_status: Optional[str] = None
+    license_reviewer_decision: Optional[str] = "PENDING"
+    license_conflict_detected: Optional[bool] = False
+    license_screening_guidance: Optional[str] = None
 
 class RecordRevalidateRequest(BaseModel):
     action: str = Field(..., description="'APPROVE', 'REJECT', or 'SAVE_ONLY'")
@@ -84,6 +91,13 @@ class RecordRevalidateRequest(BaseModel):
     accent: Optional[str] = None
     source: Optional[str] = None
     licensing: Optional[str] = None
+    licensing_evidence: Optional[str] = None
+    detected_license: Optional[str] = None
+    license_detection_source: Optional[str] = None
+    license_verification_status: Optional[str] = None
+    license_reviewer_decision: Optional[str] = None
+    license_conflict_detected: Optional[bool] = None
+    license_screening_guidance: Optional[str] = None
     sanskrit_evidence: Optional[str] = None
     description: Optional[str] = None
 
@@ -97,6 +111,12 @@ class RecordUpdateRequest(BaseModel):
     accent: Optional[str] = None
     licensing: Optional[str] = None
     licensing_evidence: Optional[str] = None
+    detected_license: Optional[str] = None
+    license_detection_source: Optional[str] = None
+    license_verification_status: Optional[str] = None
+    license_reviewer_decision: Optional[str] = None
+    license_conflict_detected: Optional[bool] = None
+    license_screening_guidance: Optional[str] = None
     sanskrit_evidence: Optional[str] = None
     speakers_id: Optional[str] = None
     researched_by: Optional[str] = None

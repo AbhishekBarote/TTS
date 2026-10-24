@@ -86,6 +86,11 @@ function initIdentity() {
     localStorage.setItem("researched_by", name);
     if (hiddenInput) hiddenInput.value = name;
     if (nameDisplay) nameDisplay.textContent = name;
+    const myResLabel = document.getElementById("my-submissions-researcher-label");
+    if (myResLabel) myResLabel.textContent = name;
+    if (state.activeTab === "my-submissions-view") {
+      loadMySubmissionsView();
+    }
     
     // Generate 2-letter initials
     if (avatarElem) {
@@ -150,6 +155,8 @@ window.switchTab = function(targetId) {
   const titleElem = document.getElementById("current-view-title");
   if (titleElem) {
     if (targetId === "dashboard-view") titleElem.textContent = "Dashboard Overview";
+    else if (targetId === "add-entry-view") titleElem.textContent = "Add New Audio Entry";
+    else if (targetId === "my-submissions-view") titleElem.textContent = "My Submissions & History";
     else if (targetId === "review-view") titleElem.textContent = "Revalidation Review Queue";
     else if (targetId === "approved-view") titleElem.textContent = "Approved Dataset (DDMMYY)";
     else if (targetId === "pipeline-view") titleElem.textContent = "Audio Processing Pipeline Tracker";
@@ -157,6 +164,18 @@ window.switchTab = function(targetId) {
   }
 
   // View-specific data loads
+  if (targetId === "dashboard-view") {
+    refreshAllData();
+  }
+  if (targetId === "add-entry-view") {
+    setTimeout(() => {
+      const input = document.getElementById("input-audio-link");
+      if (input) input.focus();
+    }, 50);
+  }
+  if (targetId === "my-submissions-view") {
+    loadMySubmissionsView();
+  }
   if (targetId === "review-view") loadReviewQueue();
   if (targetId === "approved-view") loadApprovedDataset();
   if (targetId === "pipeline-view") {
@@ -170,25 +189,149 @@ window.switchTab = function(targetId) {
 };
 
 window.focusUrlInput = function() {
-  switchTab("dashboard-view");
-  const input = document.getElementById("input-audio-link");
-  if (input) {
-    input.focus();
-    input.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
+  switchTab("add-entry-view");
 };
 
 window.scrollToRecent = function() {
-  switchTab("dashboard-view");
-  const card = document.getElementById("recent-submissions-card");
-  if (card) {
-    card.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
+  switchTab("my-submissions-view");
 };
 
 window.triggerCsvExport = function() {
   window.location.href = "/api/export/csv";
 };
+
+/* ==========================================================================
+   2b. MY SUBMISSIONS VIEW MODULE
+   ========================================================================== */
+let _mySubmissionsData = [];
+let _mySubmissionsFilter = 'ALL';
+
+async function loadMySubmissionsView(force = false) {
+  const tbody = document.getElementById("my-submissions-tbody");
+  const emptyState = document.getElementById("my-submissions-empty");
+  const researcherLabel = document.getElementById("my-submissions-researcher-label");
+  const countDisp = document.getElementById("my-submissions-count-display");
+  const researcherName = localStorage.getItem("researched_by") || "Researcher A";
+
+  if (researcherLabel) researcherLabel.textContent = researcherName;
+
+  try {
+    const res = await fetch(`/api/records?researched_by=${encodeURIComponent(researcherName)}`);
+    if (!res.ok) throw new Error("Failed to load submissions");
+    _mySubmissionsData = await res.json();
+
+    // Calculate status counts
+    const countAll = _mySubmissionsData.length;
+    const countPending = _mySubmissionsData.filter(r => r.status === "PENDING_REVALIDATION").length;
+    const countApproved = _mySubmissionsData.filter(r => ["APPROVED", "PIPELINE_PROCESSING", "VALIDATION_READY", "COMPLETED"].includes(r.status)).length;
+    const countRejected = _mySubmissionsData.filter(r => r.status && r.status.includes("REJECTED")).length;
+
+    const cAll = document.getElementById("my-count-all");
+    const cPen = document.getElementById("my-count-pending");
+    const cApp = document.getElementById("my-count-approved");
+    const cRej = document.getElementById("my-count-rejected");
+
+    if (cAll) cAll.textContent = countAll;
+    if (cPen) cPen.textContent = countPending;
+    if (cApp) cApp.textContent = countApproved;
+    if (cRej) cRej.textContent = countRejected;
+
+    renderMySubmissionsTable();
+  } catch (err) {
+    console.error("Error loading my submissions:", err);
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-4">Failed to load submissions: ${escapeHtml(err.message)}</td></tr>`;
+    }
+  }
+}
+
+window.loadMySubmissionsView = loadMySubmissionsView;
+
+window.filterMySubmissions = function(filterStatus) {
+  _mySubmissionsFilter = filterStatus;
+  document.querySelectorAll("[data-mystatus]").forEach(b => {
+    b.classList.toggle("active", b.getAttribute("data-mystatus") === filterStatus);
+  });
+  renderMySubmissionsTable();
+};
+
+window.onMySubmissionsSearch = function() {
+  renderMySubmissionsTable();
+};
+
+function renderMySubmissionsTable() {
+  const tbody = document.getElementById("my-submissions-tbody");
+  const emptyState = document.getElementById("my-submissions-empty");
+  const searchInput = document.getElementById("my-submissions-search");
+  const countDisp = document.getElementById("my-submissions-count-display");
+
+  if (!tbody) return;
+
+  const searchTerm = (searchInput ? searchInput.value : "").trim().toLowerCase();
+
+  let filtered = _mySubmissionsData.filter(r => {
+    if (_mySubmissionsFilter === "PENDING_REVALIDATION" && r.status !== "PENDING_REVALIDATION") return false;
+    if (_mySubmissionsFilter === "APPROVED" && !["APPROVED", "PIPELINE_PROCESSING", "VALIDATION_READY", "COMPLETED"].includes(r.status)) return false;
+    if (_mySubmissionsFilter === "REJECTED" && (!r.status || !r.status.includes("REJECTED"))) return false;
+
+    if (searchTerm) {
+      const match = (r.speakers_id || "").toLowerCase().includes(searchTerm) ||
+                    (r.description || "").toLowerCase().includes(searchTerm) ||
+                    (r.source || "").toLowerCase().includes(searchTerm) ||
+                    (r.audio_link || "").toLowerCase().includes(searchTerm) ||
+                    String(r.id).includes(searchTerm);
+      if (!match) return false;
+    }
+    return true;
+  });
+
+  if (countDisp) {
+    countDisp.textContent = `Showing ${filtered.length} of ${_mySubmissionsData.length} records`;
+  }
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = "";
+    if (emptyState) emptyState.classList.remove("hidden");
+    return;
+  }
+
+  if (emptyState) emptyState.classList.add("hidden");
+
+  tbody.innerHTML = filtered.map(r => {
+    const dateFormatted = formatReadableDate(r.research_date) || r.research_date_ddmmyy || "—";
+    const statusBadge = getStatusBadgeClass(r.status);
+    const audioUrl = r.audio_link || "";
+    const isPending = r.status === "PENDING_REVALIDATION" || r.status === "PENDING_RESEARCH";
+
+    return `
+      <tr>
+        <td class="font-mono text-xs text-muted">#${r.id}</td>
+        <td class="font-mono text-xs whitespace-nowrap">${escapeHtml(dateFormatted)}</td>
+        <td><span class="badge badge-gray text-xs">${escapeHtml(r.source || 'Web')}</span></td>
+        <td style="max-width: 180px;">
+          ${audioUrl ? `<a href="${escapeHtml(audioUrl)}" target="_blank" rel="noopener" class="text-xs font-mono text-primary truncate d-inline-block" style="max-width: 170px;" title="${escapeHtml(audioUrl)}"><i class="fa-solid fa-arrow-up-right-from-square"></i> ${escapeHtml(audioUrl)}</a>` : '—'}
+        </td>
+        <td class="font-mono font-bold text-xs">${escapeHtml(r.speakers_id || '—')}</td>
+        <td class="font-mono text-xs">${escapeHtml(r.before_processing_duration || '0:00')}</td>
+        <td style="max-width: 250px;">
+          <div class="text-truncate font-semibold text-xs" title="${escapeHtml(r.description || '')}">${escapeHtml(r.description ? r.description.split('\n')[0] : '—')}</div>
+          ${r.rejection_reason ? `<div class="text-xs text-danger text-truncate" title="${escapeHtml(r.rejection_reason)}">Rejection: ${escapeHtml(r.rejection_reason)}</div>` : ''}
+        </td>
+        <td><span class="badge ${statusBadge}">${r.status}</span></td>
+        <td class="whitespace-nowrap">
+          <button type="button" class="btn btn-outline btn-sm" onclick="viewAuditTrail(${r.id})" title="View Audit Trail">
+            <i class="fa-solid fa-clock-rotate-left"></i> Audit
+          </button>
+          ${isPending ? `
+            <button type="button" class="btn btn-secondary btn-sm ml-1" onclick="openRevalidateModal(${r.id})" title="Review / Edit">
+              <i class="fa-solid fa-pen-to-square"></i> Edit
+            </button>
+          ` : ''}
+        </td>
+      </tr>
+    `;
+  }).join("");
+}
 
 /* ==========================================================================
    3. DATE FORMATTING UTILITIES (DDMMYY)
@@ -318,7 +461,6 @@ function updateUrlDetectionUI(url) {
   const inputIcon = document.getElementById("unified-input-icon");
   const clearBtn = document.getElementById("btn-clear-audio-link");
   const heading = document.getElementById("intake-details-heading");
-  const globalBadge = document.getElementById("global-link-type-badge");
 
   if (clearBtn) {
     if (url && url.trim()) {
@@ -340,12 +482,6 @@ function updateUrlDetectionUI(url) {
       inputIcon.style.color = (info.type === 'youtube') ? '#ef4444' : '#2563eb';
     }
     if (heading) heading.textContent = info.heading;
-
-    if (globalBadge) {
-      globalBadge.className = `header-link-badge ${info.badgeClass}`;
-      globalBadge.textContent = info.label;
-      globalBadge.classList.remove("hidden");
-    }
   } else {
     if (chip) chip.classList.add("hidden");
     if (inputIcon) {
@@ -353,17 +489,13 @@ function updateUrlDetectionUI(url) {
       inputIcon.style.color = "#94a3b8";
     }
     if (heading) heading.textContent = "2. Enter Media & Content Details";
-    if (globalBadge) globalBadge.classList.add("hidden");
   }
 }
 
 function syncSearchInputs(value, sourceId) {
-  const ids = ["input-audio-link", "global-search-input", "web-input-url"];
-  for (const id of ids) {
-    if (id !== sourceId) {
-      const el = document.getElementById(id);
-      if (el && el.value !== value) el.value = value;
-    }
+  const el = document.getElementById("input-audio-link");
+  if (el && sourceId !== "input-audio-link" && el.value !== value) {
+    el.value = value;
   }
   updateUrlDetectionUI(value);
 }
@@ -381,9 +513,6 @@ function initDashboardForm() {
 
   const clearBtn = document.getElementById("btn-clear-audio-link");
   const pasteBtn = document.getElementById("btn-paste-audio-link");
-
-  const globalInput = document.getElementById("global-search-input");
-  const globalCheckBtn = document.getElementById("btn-global-check");
 
   // Debounced URL check on intake input
   urlInput?.addEventListener("input", () => {
@@ -430,42 +559,6 @@ function initDashboardForm() {
       showToast("Unable to access clipboard. Please paste manually.", "warning");
       urlInput?.focus();
     }
-  });
-
-  // Header Global Searchbar listeners
-  globalInput?.addEventListener("input", () => {
-    clearTimeout(duplicateCheckTimer);
-    const url = globalInput.value.trim();
-    syncSearchInputs(url, "global-search-input");
-    if (!url) {
-      resetDuplicateUI();
-      return;
-    }
-    duplicateCheckTimer = setTimeout(() => {
-      performDuplicateCheck(url);
-    }, 500);
-  });
-
-  globalInput?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const url = globalInput.value.trim();
-      if (url) {
-        switchTab("dashboard-view");
-        performDuplicateCheck(url);
-      }
-    }
-  });
-
-  globalCheckBtn?.addEventListener("click", () => {
-    const url = globalInput?.value.trim() || urlInput?.value.trim();
-    if (!url) {
-      showToast("Please paste any YouTube link or Website URL to check.", "warning");
-      globalInput?.focus();
-      return;
-    }
-    switchTab("dashboard-view");
-    performDuplicateCheck(url);
   });
 
   // Manual Check button click
@@ -536,6 +629,12 @@ function initDashboardForm() {
       viewAuditTrail(state.lastDuplicateRecord.id);
     }
   });
+
+  // Live licensing display update when dropdown changes
+  const licSelect = document.getElementById("select-licensing");
+  licSelect?.addEventListener("change", () => {
+    renderLicenseTypeDisplay(licSelect.value, "(Selected manually)");
+  });
 }
 
 function updateStepper(stepNumber) {
@@ -566,16 +665,117 @@ function resetDuplicateUI() {
   const sideDupCard = document.getElementById("side-duplicate-card");
   const submitBtn = document.getElementById("btn-submit-review");
   const meter = document.getElementById("speaker-duration-meter");
+  const licPanel = document.getElementById("license-detection-panel");
+  const licSelect = document.getElementById("select-licensing");
 
   if (banner) banner.classList.add("hidden");
   if (sideDupCard) sideDupCard.classList.add("hidden");
   if (meter) meter.classList.add("hidden");
+  if (licPanel) licPanel.classList.add("hidden");
+  if (licSelect) licSelect.value = "Standard YouTube License";
   if (submitBtn) submitBtn.disabled = false;
   state.lastDuplicateRecord = null;
   state.lastDuplicateCheck = null;
+  state.lastLicensingInfo = null;
   state.speakerDurationCheck = null;
   updateUrlDetectionUI(document.getElementById("input-audio-link")?.value || "");
   updateStepper(1);
+}
+
+function formatDetectionSource(src) {
+  if (!src || src === "none") return "None detected";
+  if (src === "video_metadata") return "YouTube Metadata";
+  if (src === "description") return "Video Description";
+  if (src === "comments") return "Pinned / Top Comment";
+  if (src === "title") return "Video Title";
+  if (src === "channel_info") return "Channel About Page";
+  if (src === "permission_links") return "Permission Link";
+  if (src === "conflict") return "Conflicting Sources";
+  return src;
+}
+
+function renderLicenseTypeDisplay(category, sourceText) {
+  const panel = document.getElementById("license-detection-panel");
+  const typeElem = document.getElementById("license-detected-type");
+  const sourceTag = document.getElementById("license-source-tag");
+
+  if (!panel || !typeElem) return;
+
+  panel.classList.remove("hidden");
+  typeElem.textContent = category || "Standard YouTube License";
+
+  if (sourceTag) {
+    sourceTag.textContent = sourceText ? `${sourceText}` : "";
+  }
+}
+
+function updateLicenseUI(licInfo) {
+  const licSelect = document.getElementById("select-licensing");
+  const panel = document.getElementById("license-detection-panel");
+  const typeElem = document.getElementById("license-detected-type");
+  const sourceTag = document.getElementById("license-source-tag");
+
+  // Backward compatibility pointers
+  const badgeStatus = document.getElementById("license-badge-status");
+  const verPill = document.getElementById("license-verification-pill");
+  const evidenceQuote = document.getElementById("license-evidence-quote");
+  const screeningAlert = document.getElementById("license-screening-alert");
+
+  if (!licSelect || !panel) return;
+
+  if (!licInfo) {
+    panel.classList.add("hidden");
+    return;
+  }
+
+  panel.classList.remove("hidden");
+
+  // Conflict Detected
+  if (licInfo.conflict_detected) {
+    licSelect.value = "Unknown / Not Specified";
+    renderLicenseTypeDisplay("Conflict Detected (Multiple Licenses)", "(Multiple Conflicting Sources)");
+
+    if (badgeStatus) badgeStatus.textContent = "CONFLICT DETECTED";
+    if (verPill) verPill.textContent = "FLAGGED FOR REVIEW";
+    if (evidenceQuote) evidenceQuote.textContent = licInfo.evidence || "";
+    if (screeningAlert) screeningAlert.innerHTML = escapeHtml(licInfo.screening_guidance || '');
+    showToast("Licensing conflict detected across sources!", "warning");
+    return;
+  }
+
+  // Detected License (defaults to Standard YouTube License if no evidence found)
+  let detected = licInfo.detected_license;
+  if (!detected || detected === "Unknown / Not Specified") {
+    detected = "Standard YouTube License";
+  }
+
+  // Automatically select in dropdown
+  let matchedOption = false;
+  for (let opt of licSelect.options) {
+    if (opt.value.toLowerCase() === detected.toLowerCase() || opt.value.toLowerCase().startsWith(detected.toLowerCase())) {
+      licSelect.value = opt.value;
+      matchedOption = true;
+      break;
+    }
+  }
+  if (!matchedOption) {
+    const newOpt = new Option(detected, detected, true, true);
+    licSelect.add(newOpt);
+  }
+
+  let sourceLabel = "";
+  if (licInfo.detection_source === "default" || licInfo.detection_source === "none" || !licInfo.detection_source) {
+    sourceLabel = "(Default - No license stated in video)";
+  } else {
+    sourceLabel = `(Source: ${formatDetectionSource(licInfo.detection_source)})`;
+  }
+
+  renderLicenseTypeDisplay(detected, sourceLabel);
+
+  if (badgeStatus) badgeStatus.textContent = "DETECTED";
+  if (verPill) verPill.textContent = licInfo.verification_status || "NEEDS_VERIFICATION";
+  if (evidenceQuote) evidenceQuote.textContent = licInfo.evidence || "";
+  if (screeningAlert) screeningAlert.innerHTML = escapeHtml(licInfo.screening_guidance || '');
 }
 
 async function checkSpeakerCapLive(speakerId, durationStr) {
@@ -711,6 +911,11 @@ async function performDuplicateCheck(url) {
     if (platform && sourceInput && (!sourceInput.value.trim() || sourceInput.value === "YouTube" || sourceInput.value === "Web")) {
       sourceInput.value = platform;
     }
+
+    // Auto-detect and populate Licensing (Requirements 1, 2, 3, 5, 6, 7)
+    const licInfo = data.licensing_info || meta.licensing_info || null;
+    state.lastLicensingInfo = licInfo;
+    updateLicenseUI(licInfo);
 
     // 2. Render Speaker Duration Meter
     if (data.speaker_duration_check) {
@@ -958,6 +1163,7 @@ async function submitNewRecord() {
   updateStepper(3);
 
   const dupCheck = state.lastDuplicateCheck || {};
+  const licInfo = state.lastLicensingInfo || {};
   const payload = {
     research_date: researchDate,
     source: source,
@@ -967,7 +1173,13 @@ async function submitNewRecord() {
     before_processing_duration: duration,
     accent: accent,
     licensing: licensing,
-    licensing_evidence: "",
+    licensing_evidence: licInfo.evidence || "",
+    detected_license: licInfo.detected_license || licensing,
+    license_detection_source: licInfo.detection_source || "manual",
+    license_verification_status: licInfo.verification_status || (licensing === "Unknown / Not Specified" ? "UNSPECIFIED" : "NEEDS_VERIFICATION"),
+    license_reviewer_decision: "PENDING",
+    license_conflict_detected: !!licInfo.conflict_detected,
+    license_screening_guidance: licInfo.screening_guidance || "",
     sanskrit_evidence: "",
     speakers_id: speakerId,
     researched_by: researchedBy,
@@ -1197,7 +1409,16 @@ async function openRevalidateModal(recordId) {
     safeSetField("modal-edit-accent", rec.accent || "Indian English");
     safeSetField("modal-rev-accent", rec.accent || "Indian English");
 
-    safeSetField("modal-edit-licensing", rec.licensing || "Standard YouTube");
+    safeSetField("modal-edit-licensing", rec.licensing || "Unknown / Not Specified");
+    const licDetails = document.getElementById("modal-licensing-details");
+    if (licDetails) {
+      licDetails.classList.remove("hidden");
+      safeSetField("modal-detected-license", rec.detected_license || rec.licensing || "None");
+      safeSetField("modal-license-source", rec.license_detection_source ? `(via ${rec.license_detection_source})` : "");
+      safeSetField("modal-license-status", rec.license_verification_status || "NEEDS_VERIFICATION");
+      safeSetField("modal-license-evidence", rec.licensing_evidence ? `Evidence: "${rec.licensing_evidence}"` : "No evidence recorded");
+      safeSetField("modal-license-guidance", rec.license_screening_guidance || "");
+    }
     safeSetField("modal-edit-sanskrit", rec.sanskrit_evidence);
 
     safeSetField("modal-edit-description", rec.description);
@@ -1255,6 +1476,8 @@ async function performRevalidationAction(action, rejectionReason = null) {
     gender: document.getElementById("modal-edit-gender")?.value,
     accent: document.getElementById("modal-edit-accent")?.value.trim(),
     licensing: document.getElementById("modal-edit-licensing")?.value.trim(),
+    license_reviewer_decision: action === "APPROVE" ? "APPROVED" : (action === "REJECT" ? "REJECTED" : "PENDING"),
+    license_verification_status: action === "APPROVE" ? "VERIFIED" : undefined,
     sanskrit_evidence: document.getElementById("modal-edit-sanskrit")?.value.trim(),
     description: document.getElementById("modal-edit-description")?.value.trim()
   };
@@ -1830,6 +2053,7 @@ async function refreshAllData() {
     if (state.activeTab === "review-view") loadReviewQueue();
     if (state.activeTab === "approved-view") loadApprovedDataset();
     if (state.activeTab === "history-view") loadAllRecords();
+    if (state.activeTab === "my-submissions-view") loadMySubmissionsView();
 
   } catch (err) {
     console.error("Stats refresh error", err);
@@ -2788,7 +3012,7 @@ window.copyContentHash = function() {
 
 window.inspectInWebPipeline = function(targetUrl) {
   if (!targetUrl) return;
-  switchTab("dashboard-view");
+  switchTab("add-entry-view");
   const input = document.getElementById("input-audio-link");
   if (input) {
     input.value = targetUrl;

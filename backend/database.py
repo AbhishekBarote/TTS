@@ -91,7 +91,13 @@ def init_db():
         ("handover", "TEXT DEFAULT 'No'"),
         ("remark", "TEXT DEFAULT ''"),
         ("content_hash", "TEXT"),
-        ("web_domain", "TEXT")
+        ("web_domain", "TEXT"),
+        ("detected_license", "TEXT"),
+        ("license_detection_source", "TEXT"),
+        ("license_verification_status", "TEXT DEFAULT 'NEEDS_VERIFICATION'"),
+        ("license_reviewer_decision", "TEXT DEFAULT 'PENDING'"),
+        ("license_conflict_detected", "INTEGER DEFAULT 0"),
+        ("license_screening_guidance", "TEXT")
     ]
     for col_name, col_type in columns_to_add:
         if col_name not in existing_cols:

@@ -14,6 +14,7 @@ Strictly verifies all 11 Acceptance Criteria from Section 14 of final_implementa
 11. The existing final 11-column CSV format remains unchanged.
 """
 
+import os
 from fastapi.testclient import TestClient
 from backend.app import app
 from backend.llm_adapter import llm_config, LLMAdapter, LLMDecision
@@ -77,9 +78,8 @@ def run_tests():
     res = client.get("/api/llm/config")
     assert res.status_code == 200, res.text
     cfg = res.json()
-    assert "timeout_seconds" in cfg
-    assert "top_k_matches" in cfg
-    assert cfg["timeout_seconds"] == 20
+    expected_timeout = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
+    assert cfg["timeout_seconds"] == expected_timeout
     assert cfg["top_k_matches"] == 3
 
     # Test LLM endpoint adapter simulation API

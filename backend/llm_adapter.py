@@ -37,7 +37,7 @@ class LLMConfig:
         self.endpoint_path = os.getenv("LLM_ENDPOINT_PATH", "/chat/completions")
         self.api_key = os.getenv("LLM_API_KEY", "")
         self.model = os.getenv("LLM_MODEL", "my-model")
-        self.timeout_seconds = int(os.getenv("LLM_TIMEOUT_SECONDS", "25"))
+        self.timeout_seconds = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
         self.top_k_matches = int(os.getenv("LLM_TOP_K_MATCHES", "3"))
 
     def get_full_url(self, base_url: Optional[str] = None, endpoint_path: Optional[str] = None) -> str:

@@ -43,11 +43,11 @@
           <i class="fa-solid fa-house"></i>
           <span>Dashboard</span>
         </button>
-        <button class="nav-item" id="side-tab-add" data-tab="dashboard-view" onclick="focusUrlInput()">
+        <button class="nav-item" id="side-tab-add" data-tab="add-entry-view">
           <i class="fa-solid fa-circle-plus"></i>
           <span>Add New Entry</span>
         </button>
-        <button class="nav-item" id="side-tab-my" data-tab="dashboard-view" onclick="scrollToRecent()">
+        <button class="nav-item" id="side-tab-my" data-tab="my-submissions-view">
           <i class="fa-regular fa-folder-open"></i>
           <span>My Submissions</span>
         </button>
@@ -101,20 +101,6 @@
           <h2 class="view-heading-title" id="current-view-title">Dashboard Overview</h2>
         </div>
 
-        <!-- UNIVERSAL LOW-LATENCY SEARCHBAR FOR WEBSITES & YOUTUBE LINKS -->
-        <div class="header-center">
-          <div class="header-search-wrapper" title="Fast URL Check: Paste any YouTube link or Website URL">
-            <i class="fa-solid fa-magnifying-glass header-search-icon"></i>
-            <input type="url" id="global-search-input" class="header-search-input"
-              placeholder="Search or paste any YouTube link or Website URL..." autocomplete="off">
-            <span id="global-link-type-badge" class="header-link-badge hidden">YouTube</span>
-            <button type="button" class="header-search-btn btn-search-check" id="btn-global-check"
-              title="Fast duplicate check">
-              <i class="fa-solid fa-bolt"></i> Verify & Check
-            </button>
-          </div>
-        </div>
-
         <div class="header-right">
           <!-- LLM Endpoint Status & Settings -->
           <button type="button" class="header-llm-btn" id="btn-open-llm-settings" onclick="openLlmConfigModal()"
@@ -146,7 +132,7 @@
           <div class="metrics-grid">
 
             <!-- Card 1: My Submissions -->
-            <div class="metric-card">
+            <div class="metric-card" onclick="switchTab('my-submissions-view')" style="cursor: pointer;" title="Click to view all My Submissions">
               <div class="metric-card-icon icon-blue">
                 <i class="fa-solid fa-diagram-project"></i>
               </div>
@@ -158,7 +144,7 @@
             </div>
 
             <!-- Card 2: Pending Revalidation -->
-            <div class="metric-card">
+            <div class="metric-card" onclick="switchTab('review-view')" style="cursor: pointer;" title="Click to open Revalidation Queue">
               <div class="metric-card-icon icon-amber">
                 <i class="fa-regular fa-clock"></i>
               </div>
@@ -170,7 +156,7 @@
             </div>
 
             <!-- Card 3: Approved Records -->
-            <div class="metric-card">
+            <div class="metric-card" onclick="switchTab('approved-view')" style="cursor: pointer;" title="Click to view Approved Dataset">
               <div class="metric-card-icon icon-emerald">
                 <i class="fa-solid fa-circle-check"></i>
               </div>
@@ -196,6 +182,132 @@
           </div>
 
           <!-- MAIN 2-COLUMN DASHBOARD GRID -->
+          <div class="dashboard-grid">
+
+            <!-- LEFT COLUMN: DASHBOARD WORKFLOW & QUICK ACTIONS -->
+            <div class="card p-4">
+              <div class="card-intake-header">
+                <div class="header-icon-square" style="background: linear-gradient(135deg, #2563eb, #1d4ed8);">
+                  <i class="fa-solid fa-bolt"></i>
+                </div>
+                <div>
+                  <h3 class="card-title">Audio Research & Pipeline Hub</h3>
+                  <p class="card-subtitle">Indian English Speech with Spoken Sanskrit Terms Dataset Workflow</p>
+                </div>
+              </div>
+
+              <div class="quick-action-cta-box mb-4 p-3 rounded" style="background: #f8fafc; border: 1px solid var(--border-color);">
+                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                  <div>
+                    <strong style="font-size: 0.95rem; color: var(--text-primary);"><i class="fa-solid fa-circle-plus text-primary"></i> Ready to add new recordings?</strong>
+                    <p class="text-xs text-muted mt-1" style="margin-bottom:0;">Paste any YouTube link or Website URL for sub-50ms duplicate detection.</p>
+                  </div>
+                  <button type="button" class="btn btn-primary" onclick="switchTab('add-entry-view')">
+                    <i class="fa-solid fa-plus"></i> Add New Entry
+                  </button>
+                </div>
+              </div>
+
+              <div class="workflow-shortcuts-grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+                <button type="button" class="btn btn-outline" style="justify-content: flex-start; text-align: left; padding: 12px 14px;" onclick="switchTab('my-submissions-view')">
+                  <i class="fa-regular fa-folder-open text-primary" style="font-size: 1.1rem;"></i>
+                  <div>
+                    <div class="font-bold text-xs" style="color: var(--text-primary);">My Submissions</div>
+                    <div class="text-muted" style="font-size: 11px;">Inspect your submissions</div>
+                  </div>
+                </button>
+
+                <button type="button" class="btn btn-outline" style="justify-content: flex-start; text-align: left; padding: 12px 14px;" onclick="switchTab('review-view')">
+                  <i class="fa-solid fa-circle-check text-amber" style="font-size: 1.1rem;"></i>
+                  <div>
+                    <div class="font-bold text-xs" style="color: var(--text-primary);">Revalidation Queue</div>
+                    <div class="text-muted" style="font-size: 11px;">Review pending records</div>
+                  </div>
+                </button>
+
+                <button type="button" class="btn btn-outline" style="justify-content: flex-start; text-align: left; padding: 12px 14px;" onclick="switchTab('pipeline-view')">
+                  <i class="fa-solid fa-bolt-lightning text-primary" style="font-size: 1.1rem;"></i>
+                  <div>
+                    <div class="font-bold text-xs" style="color: var(--text-primary);">Live Pipeline Tracker</div>
+                    <div class="text-muted" style="font-size: 11px;">Monitor audio stages</div>
+                  </div>
+                </button>
+
+                <button type="button" class="btn btn-outline" style="justify-content: flex-start; text-align: left; padding: 12px 14px;" onclick="switchTab('approved-view')">
+                  <i class="fa-solid fa-database text-emerald" style="font-size: 1.1rem;"></i>
+                  <div>
+                    <div class="font-bold text-xs" style="color: var(--text-primary);">Approved Dataset</div>
+                    <div class="text-muted" style="font-size: 11px;">Validated recordings</div>
+                  </div>
+                </button>
+              </div>
+
+              <!-- Workflow step guide bar -->
+              <div class="mt-4 pt-3" style="border-top: 1px solid var(--border-color);">
+                <div class="text-xs text-muted mb-2 font-semibold"><i class="fa-solid fa-circle-info text-primary"></i> 4-Stage Ingestion Protocol:</div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                  <span class="badge badge-gray text-xs">1. Paste Link & Check (&lt;50ms)</span>
+                  <span class="badge badge-gray text-xs">2. Form Auto-population</span>
+                  <span class="badge badge-gray text-xs">3. Revalidation Review</span>
+                  <span class="badge badge-gray text-xs">4. Approved &amp; Pipeline</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- RIGHT COLUMN: RECENT SUBMISSIONS -->
+            <div class="sidebar-cards-col">
+              <div class="card card-recent-side" id="recent-submissions-card">
+                <div class="recent-header">
+                  <h4 class="recent-title">Recent Submissions (My Entries)</h4>
+                  <button type="button" class="btn-link" onclick="switchTab('my-submissions-view')">View All</button>
+                </div>
+
+                <div class="table-responsive-clean">
+                  <table class="clean-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Title / Description</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody id="recent-submissions-tbody">
+                      <!-- Dynamically rendered -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- SPEAKER DURATION LEDGERS (SECTION 9: 3.5-HOUR CAP) -->
+          <div class="speaker-ledgers-container card p-4 mt-3">
+            <div class="panel-header-clean">
+              <div>
+                <h4 class="panel-h3"><i class="fa-solid fa-chart-pie text-primary"></i> Speaker Duration
+                </h4>
+                <p class="text-xs text-muted">Tracking cumulative accepted audio duration per speaker. Cap is strictly
+                  enforced at 12,600 seconds (3.5 hours).</p>
+              </div>
+              <div class="d-flex align-items-center gap-2">
+                <span class="badge badge-gray text-xs" id="speaker-count-badge">Loading Speakers...</span>
+                <button class="btn btn-secondary btn-sm" id="btn-refresh-speaker-ledgers"
+                  title="Synchronize and Refresh"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+              </div>
+            </div>
+
+            <div id="dashboard-speakers-grid" class="speaker-grid mt-3">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+        </section>
+
+        <!-- ============================================== -->
+        <!-- VIEW: ADD NEW AUDIO ENTRY                      -->
+        <!-- ============================================== -->
+        <section id="add-entry-view" class="view-panel">
           <div class="dashboard-grid">
 
             <!-- LEFT COLUMN: ADD NEW AUDIO ENTRY CARD -->
@@ -235,7 +347,7 @@
                 <div class="intake-section">
                   <div class="label-row-between">
                     <label for="input-audio-link" class="intake-label required" style="margin-bottom:0;">
-                      1. Unified Searchbar: YouTube & Websites
+                      1. Audio / Video Link (YouTube & Websites)
                     </label>
                     <div id="unified-link-detector" class="link-type-chip hidden">
                       <i class="fa-solid fa-globe" id="unified-chip-icon"></i>
@@ -263,8 +375,6 @@
                       <i class="fa-solid fa-bolt"></i> Verify Link
                     </button>
                   </div>
-
-
 
                   <!-- Dynamic Low-Latency Status & Provenance Alert Box -->
                   <div id="duplicate-status-box" class="status-banner banner-success hidden">
@@ -381,13 +491,43 @@
                       <div class="form-field mt-2">
                         <label for="select-licensing" class="intake-label required">Licensing</label>
                         <select id="select-licensing" class="hub-input" required>
-                          <option value="CC BY (Attribution Required)">CC BY (Attribution Required)</option>
-                          <option value="Public Domain">Public Domain</option>
-                          <option value="CC BY-SA">CC BY-SA</option>
-                          <option value="CC BY-NC">CC BY-NC</option>
-                          <option value="Permission Granted">Permission Granted</option>
+                          <option value="Unknown / Not Specified">Unknown / Not Specified (Manual Selection)</option>
                           <option value="Standard YouTube License">Standard YouTube License</option>
+                          <option value="CC BY">CC BY</option>
+                          <option value="CC BY-SA">CC BY-SA</option>
+                          <option value="CC BY-ND">CC BY-ND</option>
+                          <option value="CC BY-NC">CC BY-NC</option>
+                          <option value="CC BY-NC-SA">CC BY-NC-SA</option>
+                          <option value="CC BY-NC-ND">CC BY-NC-ND</option>
+                          <option value="Public Domain">Public Domain</option>
+                          <option value="Direct Written Permission">Direct Written Permission</option>
+                          <option value="YouTube Third-Party AI Training Permission">YouTube Third-Party AI Training Permission</option>
+                          <option value="CC BY (Attribution Required)" style="display:none;">CC BY (Attribution Required)</option>
+                          <option value="Permission Granted" style="display:none;">Permission Granted</option>
                         </select>
+
+                        <!-- Licensing Type Display (No Accept/Reject messages) -->
+                        <div id="license-detection-panel" class="license-detection-panel mt-1.5 p-2 rounded hidden" style="background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.82rem; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                          <div class="d-flex align-items-center gap-1.5" style="flex: 1; flex-wrap: wrap;">
+                            <span class="text-xs text-muted font-medium"><i class="fa-solid fa-scale-balanced text-indigo-600 mr-1"></i>Licensing:</span>
+                            <strong id="license-detected-type" class="text-xs text-slate-800 font-semibold"></strong>
+                          </div>
+                          <span id="license-source-tag" class="text-xs text-muted font-mono" style="font-size: 0.72rem; white-space: nowrap;"></span>
+
+                          <!-- Hidden backward-compatibility elements -->
+                          <div style="display: none;">
+                            <span id="license-decision-badge"></span>
+                            <span id="license-decision-msg"></span>
+                            <span id="license-badge-status"></span>
+                            <span id="license-verification-pill"></span>
+                            <div id="license-plain-title"><span id="license-plain-title-text"></span></div>
+                            <i id="license-main-icon"></i>
+                            <div id="license-what-means"></div>
+                            <ul id="license-action-checklist"></ul>
+                            <div id="license-evidence-quote"></div>
+                            <div id="license-screening-alert"></div>
+                          </div>
+                        </div>
                       </div>
 
                       <div class="form-field mt-2">
@@ -433,59 +573,151 @@
               </form>
             </div>
 
-            <!-- RIGHT COLUMN: DUPLICATE CARD + RECENT SUBMISSIONS -->
+            <!-- RIGHT COLUMN: INTAKE GUIDELINES & CRITERIA -->
             <div class="sidebar-cards-col">
-
-
-
-              <!-- CARD 2: RECENT SUBMISSIONS (MY ENTRIES) -->
-              <div class="card card-recent-side" id="recent-submissions-card">
-                <div class="recent-header">
-                  <h4 class="recent-title">Recent Submissions (My Entries)</h4>
-                  <button type="button" class="btn-link" onclick="switchTab('approved-view')">View All</button>
+              <div class="card p-4">
+                <div class="panel-header-clean mb-3">
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <i class="fa-solid fa-clipboard-check text-primary"></i>
+                    <h4 class="card-title" style="font-size:0.95rem;margin:0;">Audio Intake Guidelines</h4>
+                  </div>
                 </div>
 
-                <div class="table-responsive-clean">
-                  <table class="clean-table">
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        <th>Title / Description</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody id="recent-submissions-tbody">
-                      <!-- Dynamically rendered -->
-                    </tbody>
-                  </table>
+                <div class="guidelines-list" style="display:flex;flex-direction:column;gap:12px;">
+                  <div class="guideline-item" style="display:flex;gap:10px;align-items:flex-start;">
+                    <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:#e0f2fe;color:#0284c7;border-radius:50%;font-size:11px;flex-shrink:0;"><i class="fa-solid fa-bolt"></i></span>
+                    <div style="font-size:12px;color:#334155;">
+                      <strong>Fast Duplicate Detection:</strong> Real-time SHA-256 content hashing checks candidates against approved records in &lt;50ms.
+                    </div>
+                  </div>
+
+                  <div class="guideline-item" style="display:flex;gap:10px;align-items:flex-start;">
+                    <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:#fef3c7;color:#d97706;border-radius:50%;font-size:11px;flex-shrink:0;"><i class="fa-regular fa-clock"></i></span>
+                    <div style="font-size:12px;color:#334155;">
+                      <strong>Duration Threshold:</strong> Recordings must be at least 10 minutes (formatted as MM:SS or HH:MM:SS).
+                    </div>
+                  </div>
+
+                  <div class="guideline-item" style="display:flex;gap:10px;align-items:flex-start;">
+                    <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:#ede9fe;color:#7c3aed;border-radius:50%;font-size:11px;flex-shrink:0;"><i class="fa-solid fa-microphone-lines"></i></span>
+                    <div style="font-size:12px;color:#334155;">
+                      <strong>Accent &amp; Pronunciation:</strong> Clean Indian English speech with audible spoken Sanskrit terminology.
+                    </div>
+                  </div>
+
+                  <div class="guideline-item" style="display:flex;gap:10px;align-items:flex-start;">
+                    <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:#fee2e2;color:#dc2626;border-radius:50%;font-size:11px;flex-shrink:0;"><i class="fa-solid fa-stopwatch"></i></span>
+                    <div style="font-size:12px;color:#334155;">
+                      <strong>3.5-Hour Speaker Cap:</strong> Maximum 12,600s total duration permitted per Speaker ID across the dataset.
+                    </div>
+                  </div>
+
+                  <div class="guideline-item" style="display:flex;gap:10px;align-items:flex-start;">
+                    <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;background:#dcfce7;color:#16a34a;border-radius:50%;font-size:11px;flex-shrink:0;"><i class="fa-solid fa-scale-balanced"></i></span>
+                    <div style="font-size:12px;color:#334155;">
+                      <strong>Licensing:</strong> Verify Standard YouTube license, CC-BY, or public domain authorization.
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mt-4 pt-3" style="border-top:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;">
+                  <button type="button" class="btn btn-outline btn-sm" onclick="switchTab('my-submissions-view')">
+                    <i class="fa-regular fa-folder-open"></i> My Submissions
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="fetchNextSpeakerId()">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> Next Speaker
+                  </button>
                 </div>
               </div>
-
             </div>
 
           </div>
+        </section>
 
-          <!-- SPEAKER DURATION LEDGERS (SECTION 9: 3.5-HOUR CAP) -->
-          <div class="speaker-ledgers-container card p-4 mt-3">
-            <div class="panel-header-clean">
+        <!-- ============================================== -->
+        <!-- VIEW: MY SUBMISSIONS                           -->
+        <!-- ============================================== -->
+        <section id="my-submissions-view" class="view-panel">
+          <div class="card p-4">
+            <div class="panel-header-clean" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
               <div>
-                <h4 class="panel-h3"><i class="fa-solid fa-chart-pie text-primary"></i> Speaker Duration
-                </h4>
-                <p class="text-xs text-muted">Tracking cumulative accepted audio duration per speaker. Cap is strictly
-                  enforced at 12,600 seconds (3.5 hours).</p>
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <span class="pipeline-header-icon" style="display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;background:rgba(37,99,235,0.12);border-radius:8px;border:1px solid rgba(37,99,235,0.3);"><i class="fa-regular fa-folder-open text-primary"></i></span>
+                  <h3 class="panel-h3" style="margin:0;">My Audio Submissions</h3>
+                </div>
+                <p class="text-sm text-muted" style="margin-top:4px;">
+                  Showing records submitted by <strong id="my-submissions-researcher-label" class="text-primary font-mono">Researcher A</strong>.
+                </p>
               </div>
-              <div class="d-flex align-items-center gap-2">
-                <span class="badge badge-gray text-xs" id="speaker-count-badge">Loading Speakers...</span>
-                <button class="btn btn-secondary btn-sm" id="btn-refresh-speaker-ledgers"
-                  title="Synchronize and Refresh"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <button type="button" class="btn btn-outline btn-sm" onclick="loadMySubmissionsView(true)">
+                  <i class="fa-solid fa-rotate"></i> Refresh
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" onclick="switchTab('add-entry-view')">
+                  <i class="fa-solid fa-plus"></i> Add New Entry
+                </button>
               </div>
             </div>
 
-            <div id="dashboard-speakers-grid" class="speaker-grid mt-3">
-              <!-- Dynamically populated -->
+            <!-- Status filter tabs -->
+            <div class="status-tabs-row mt-3">
+              <button class="status-tab-btn active" data-mystatus="ALL" onclick="filterMySubmissions('ALL')">
+                All My Entries (<span id="my-count-all">0</span>)
+              </button>
+              <button class="status-tab-btn" data-mystatus="PENDING_REVALIDATION" onclick="filterMySubmissions('PENDING_REVALIDATION')">
+                <i class="fa-regular fa-clock text-amber"></i> Pending (<span id="my-count-pending">0</span>)
+              </button>
+              <button class="status-tab-btn" data-mystatus="APPROVED" onclick="filterMySubmissions('APPROVED')">
+                <i class="fa-solid fa-check text-emerald"></i> Approved (<span id="my-count-approved">0</span>)
+              </button>
+              <button class="status-tab-btn" data-mystatus="REJECTED" onclick="filterMySubmissions('REJECTED')">
+                <i class="fa-solid fa-ban text-rose"></i> Rejected (<span id="my-count-rejected">0</span>)
+              </button>
+            </div>
+
+            <!-- Search bar -->
+            <div class="table-action-bar mt-3" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+              <div style="position:relative;flex:1;max-width:380px;">
+                <i class="fa-solid fa-magnifying-glass" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:13px;"></i>
+                <input type="text" id="my-submissions-search" class="hub-input search-box" placeholder="Search by Speaker, Title, Source..." style="padding-left:34px;" oninput="onMySubmissionsSearch()">
+              </div>
+              <span class="text-xs text-muted" id="my-submissions-count-display">Showing 0 records</span>
+            </div>
+
+            <!-- Table -->
+            <div class="table-container-card mt-3">
+              <table class="data-table" id="my-submissions-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Date</th>
+                    <th>Source</th>
+                    <th>Audio Link</th>
+                    <th>Speaker ID</th>
+                    <th>Duration</th>
+                    <th>Description / Title</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="my-submissions-tbody">
+                  <!-- Dynamically rendered -->
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Empty state -->
+            <div id="my-submissions-empty" class="hidden" style="text-align:center;padding:50px 20px;">
+              <i class="fa-regular fa-folder-open fa-3x" style="color:#cbd5e1;margin-bottom:16px;"></i>
+              <h4 style="color:#64748b;font-size:1.1rem;margin-bottom:8px;">No Submissions Found</h4>
+              <p class="text-sm text-muted" style="max-width:440px;margin:0 auto 20px;">
+                No recordings found matching the selected filter. Click below to add a new audio entry.
+              </p>
+              <button class="btn btn-primary btn-sm" onclick="switchTab('add-entry-view')">
+                <i class="fa-solid fa-plus"></i> Add New Audio Entry
+              </button>
             </div>
           </div>
-
         </section>
 
         <!-- ============================================== -->
@@ -850,12 +1082,34 @@
               <div class="grid-2col gap-2 mt-2">
                 <div>
                   <label for="modal-edit-licensing" class="text-xs text-muted uppercase font-bold d-block mb-1">Licensing</label>
-                  <input type="text" id="modal-edit-licensing" class="hub-input text-xs" placeholder="e.g. Standard YouTube / CC">
+                  <select id="modal-edit-licensing" class="hub-input text-xs">
+                    <option value="Unknown / Not Specified">Unknown / Not Specified</option>
+                    <option value="Standard YouTube License">Standard YouTube License</option>
+                    <option value="CC BY">CC BY</option>
+                    <option value="CC BY-SA">CC BY-SA</option>
+                    <option value="CC BY-ND">CC BY-ND</option>
+                    <option value="CC BY-NC">CC BY-NC</option>
+                    <option value="CC BY-NC-SA">CC BY-NC-SA</option>
+                    <option value="CC BY-NC-ND">CC BY-NC-ND</option>
+                    <option value="Public Domain">Public Domain</option>
+                    <option value="Direct Written Permission">Direct Written Permission</option>
+                    <option value="YouTube Third-Party AI Training Permission">YouTube Third-Party AI Training Permission</option>
+                  </select>
                 </div>
                 <div>
                   <label for="modal-edit-sanskrit" class="text-xs text-muted uppercase font-bold d-block mb-1">Sanskrit Evidence</label>
                   <input type="text" id="modal-edit-sanskrit" class="hub-input text-xs" placeholder="Spoken Sanskrit words">
                 </div>
+              </div>
+
+              <!-- Modal Licensing Verification & Evidence Box -->
+              <div id="modal-licensing-details" class="text-xs mt-2 p-2 rounded border hidden" style="background: #f8fafc; border: 1px solid #e2e8f0;">
+                <div class="d-flex align-items-center justify-content-between mb-1">
+                  <div><strong>Detected Claim:</strong> <span id="modal-detected-license" class="badge badge-indigo text-xs">None</span> <span id="modal-license-source" class="text-muted font-mono text-xs"></span></div>
+                  <span id="modal-license-status" class="badge badge-warning text-xs">PENDING</span>
+                </div>
+                <div id="modal-license-evidence" class="text-secondary font-italic mb-1"></div>
+                <div id="modal-license-guidance" class="font-semibold text-primary"></div>
               </div>
             </div>
 
@@ -1179,7 +1433,7 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=20261022_rev11"></script>
+  <script src="/static/app.js?v=20261023_rev2"></script>
 </body>
 
 </html>
