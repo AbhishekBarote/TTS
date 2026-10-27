@@ -1,37 +1,232 @@
 """
-Database manager for the Centralized Audio Research and Revalidation Workflow.
-Uses SQLite for persistent storage with strict uniqueness constraints,
-per-speaker duration tracking ledger, and full duplicate decision audit logs.
-Adheres to Section 11 of final_implementation_architecture.md.
+PostgreSQL Database manager for Centralized Audio Research and Revalidation Workflow.
+Replaces SQLite persistence with PostgreSQL (psycopg2) and provides transparent
+query compatibility, strict uniqueness constraints, per-speaker duration tracking ledger,
+and full duplicate decision audit logs.
 """
 
-import sqlite3
 import os
+import re
 import json
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    _backend_env = os.path.join(os.path.dirname(__file__), ".env")
+    if os.path.exists(_backend_env):
+        load_dotenv(_backend_env, override=True)
+except ImportError:
+    pass
+
+import psycopg2
+from psycopg2.extras import DictCursor, DictRow
+
 from backend.duplicate import canonicalize_url, extract_platform_and_item_id
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "audio_workflow.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://tts_app:ttsdata@localhost:5432/tts_research")
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+
+def _convert_placeholders(sql: str) -> str:
+    """Replaces ? with %s outside single-quoted string literals."""
+    out = []
+    in_string = False
+    for ch in sql:
+        if ch == "'":
+            in_string = not in_string
+            out.append(ch)
+        elif ch == '?' and not in_string:
+            out.append('%s')
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _translate_sql(sql: str) -> tuple[str, bool]:
+    """Translates SQLite-specific SQL idioms to PostgreSQL equivalents."""
+    s = sql.strip()
+
+    # 1. PRAGMA table_info(<table>) -> information_schema
+    m = re.match(r"(?i)^PRAGMA\s+table_info\((\w+)\)", s)
+    if m:
+        tbl = m.group(1).lower()
+        return (
+            f"SELECT column_name AS name FROM information_schema.columns "
+            f"WHERE table_schema = 'public' AND table_name = '{tbl}'",
+            False
+        )
+
+    # 2. SQLite AUTOINCREMENT
+    s = re.sub(r"(?i)INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "SERIAL PRIMARY KEY", s)
+
+    # 3. INSERT OR IGNORE INTO speaker_duration_ledger
+    if re.search(r"(?i)INSERT\s+OR\s+IGNORE\s+INTO\s+speaker_duration_ledger", s):
+        s = re.sub(r"(?i)INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", s)
+        s += " ON CONFLICT (speaker_id, video_id) DO NOTHING"
+
+    # 4. INSERT OR REPLACE INTO speaker_duration_ledger
+    elif re.search(r"(?i)INSERT\s+OR\s+REPLACE\s+INTO\s+speaker_duration_ledger", s):
+        s = re.sub(r"(?i)INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", s)
+        s += (
+            " ON CONFLICT (speaker_id, video_id) DO UPDATE SET "
+            "duration_seconds = EXCLUDED.duration_seconds, "
+            "accepted_status = EXCLUDED.accepted_status, "
+            "accepted_at = EXCLUDED.accepted_at"
+        )
+
+    # 5. INSERT OR REPLACE INTO pipeline_jobs
+    elif re.search(r"(?i)INSERT\s+OR\s+REPLACE\s+INTO\s+pipeline_jobs", s):
+        s = re.sub(r"(?i)INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", s)
+        s += (
+            " ON CONFLICT (record_id) DO UPDATE SET "
+            "job_id = EXCLUDED.job_id, file_name = EXCLUDED.file_name, "
+            "audio_link = EXCLUDED.audio_link, speaker_id = EXCLUDED.speaker_id, "
+            "speaker_name = EXCLUDED.speaker_name, stage = EXCLUDED.stage, "
+            "step_id = EXCLUDED.step_id, step_name = EXCLUDED.step_name, "
+            "progress_pct = EXCLUDED.progress_pct, started_at = EXCLUDED.started_at, "
+            "started_at_display = EXCLUDED.started_at_display, error = EXCLUDED.error, "
+            "updated_at = EXCLUDED.updated_at"
+        )
+
+    # 6. Convert ? placeholders to %s
+    s = _convert_placeholders(s)
+
+    # 7. Convert LIKE to ILIKE for case-insensitive search parity
+    s = re.sub(r"(?i)\s+LIKE\s+", " ILIKE ", s)
+
+    # 8. Append RETURNING id for INSERT queries if not already present
+    appended_returning = False
+    if (
+        re.match(r"(?i)^\s*INSERT\s+INTO\s+\w+", s)
+        and "RETURNING" not in s.upper()
+        and ";" not in s
+    ):
+        s += " RETURNING id"
+        appended_returning = True
+
+    return s, appended_returning
+
+
+class PgCursorWrapper:
+    """Wraps psycopg2 DictCursor to provide sqlite3 cursor API compatibility."""
+
+    def __init__(self, raw_cursor):
+        self._cursor = raw_cursor
+        self._lastrowid = None
+
+    @property
+    def lastrowid(self):
+        return self._lastrowid
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    @property
+    def description(self):
+        return self._cursor.description
+
+    def execute(self, query: str, params: Any = None):
+        translated_query, appended_returning = _translate_sql(query)
+        if params is not None:
+            if isinstance(params, (list, tuple)):
+                # Ensure all elements are suitable for psycopg2
+                params = tuple(params)
+            self._cursor.execute(translated_query, params)
+        else:
+            self._cursor.execute(translated_query)
+
+        if appended_returning:
+            try:
+                res = self._cursor.fetchone()
+                if res:
+                    self._lastrowid = res[0]
+                else:
+                    self._lastrowid = None
+            except Exception:
+                self._lastrowid = None
+        return self
+
+    def executescript(self, script: str):
+        translated, _ = _translate_sql(script)
+        self._cursor.execute(translated)
+        return self
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    def fetchmany(self, size: int = 1):
+        return self._cursor.fetchmany(size)
+
+    def close(self):
+        return self._cursor.close()
+
+    def __iter__(self):
+        return iter(self._cursor)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+
+class PgConnectionWrapper:
+    """Wraps psycopg2 connection to provide sqlite3 connection API compatibility."""
+
+    def __init__(self, raw_conn):
+        self._conn = raw_conn
+        self.row_factory = None
+
+    def cursor(self):
+        raw_cur = self._conn.cursor(cursor_factory=DictCursor)
+        return PgCursorWrapper(raw_cur)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        return self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            self.rollback()
+        else:
+            self.commit()
+
+
+def get_connection() -> PgConnectionWrapper:
+    """Returns a PostgreSQL connection wrapped for seamless SQLite-call parity."""
+    raw_conn = psycopg2.connect(DATABASE_URL)
+    return PgConnectionWrapper(raw_conn)
+
 
 def init_db():
+    """Initializes and verifies the PostgreSQL database schema idempotently."""
     conn = get_connection()
     cursor = conn.cursor()
 
     # 1. Records table (Video records)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         research_date TEXT NOT NULL,
         source TEXT NOT NULL,
         audio_link TEXT NOT NULL,
-        canonical_url TEXT NOT NULL UNIQUE,
+        canonical_url TEXT NOT NULL,
         platform_item_id TEXT,
+        title TEXT,
+        channel_name TEXT,
         description TEXT NOT NULL,
         gender TEXT NOT NULL,
         before_processing_duration TEXT NOT NULL,
@@ -56,98 +251,36 @@ def init_db():
         speaker_channel_name TEXT DEFAULT '',
         handover TEXT DEFAULT 'No',
         remark TEXT DEFAULT '',
+        duplicate_status TEXT DEFAULT 'UNIQUE',
+        matched_video_id TEXT,
+        decision_reason TEXT,
+        evidence_fields TEXT,
+        content_hash TEXT,
+        web_domain TEXT,
+        detected_license TEXT,
+        license_detection_source TEXT,
+        license_verification_status TEXT DEFAULT 'NEEDS_VERIFICATION',
+        license_reviewer_decision TEXT DEFAULT 'PENDING',
+        license_conflict_detected INTEGER DEFAULT 0,
+        license_screening_guidance TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
     """)
 
-    # Index on canonical_url and platform_item_id
+    cursor.execute("ALTER TABLE records DROP CONSTRAINT IF EXISTS records_canonical_url_key;")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_canonical_url ON records (canonical_url);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_platform_item ON records (source, platform_item_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON records (status);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_speaker ON records (speakers_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_records_content_hash ON records (content_hash);")
 
-    # 2. Schema Migrations: Add new fields if not already present
-    cursor.execute("PRAGMA table_info(records)")
-    existing_cols = {col["name"] for col in cursor.fetchall()}
 
-    columns_to_add = [
-        ("title", "TEXT"),
-        ("channel_name", "TEXT"),
-        ("duplicate_status", "TEXT DEFAULT 'UNIQUE'"),
-        ("matched_video_id", "TEXT"),
-        ("decision_reason", "TEXT"),
-        ("evidence_fields", "TEXT"),
-        ("completion_date", "TEXT DEFAULT ''"),
-        ("text_link", "TEXT DEFAULT 'ASR'"),
-        ("dataset_name", "TEXT DEFAULT ''"),
-        ("after_processing_duration", "TEXT DEFAULT '0:00:00'"),
-        ("total_files", "TEXT DEFAULT ''"),
-        ("assigned_to", "TEXT DEFAULT ''"),
-        ("data_type_augmentation_status", "TEXT DEFAULT 'Original'"),
-        ("data_available", "TEXT DEFAULT 'Lightining AV/HF'"),
-        ("speaker_channel_name", "TEXT DEFAULT ''"),
-        ("handover", "TEXT DEFAULT 'No'"),
-        ("remark", "TEXT DEFAULT ''"),
-        ("content_hash", "TEXT"),
-        ("web_domain", "TEXT"),
-        ("detected_license", "TEXT"),
-        ("license_detection_source", "TEXT"),
-        ("license_verification_status", "TEXT DEFAULT 'NEEDS_VERIFICATION'"),
-        ("license_reviewer_decision", "TEXT DEFAULT 'PENDING'"),
-        ("license_conflict_detected", "INTEGER DEFAULT 0"),
-        ("license_screening_guidance", "TEXT")
-    ]
-    for col_name, col_type in columns_to_add:
-        if col_name not in existing_cols:
-            cursor.execute(f"ALTER TABLE records ADD COLUMN {col_name} {col_type};")
 
-    # 3. Web Verifications table (8-Stage Web Search Deduplication Engine)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS web_verifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        url TEXT NOT NULL,
-        canonical_url TEXT NOT NULL UNIQUE,
-        final_url TEXT,
-        domain TEXT,
-        title TEXT,
-        headings TEXT,
-        author TEXT,
-        publication_date TEXT,
-        description TEXT,
-        raw_text TEXT,
-        normalized_text TEXT,
-        content_hash TEXT NOT NULL,
-        passages TEXT,
-        status TEXT NOT NULL DEFAULT 'UNIQUE',
-        matched_page_id TEXT,
-        matched_url TEXT,
-        prefilter_status TEXT,
-        prefilter_score REAL DEFAULT 0.0,
-        lexical_score REAL DEFAULT 0.0,
-        passage_score REAL DEFAULT 0.0,
-        title_score REAL DEFAULT 0.0,
-        decision_reason TEXT,
-        evidence_fields TEXT,
-        llm_called INTEGER DEFAULT 0,
-        confidence REAL DEFAULT 1.0,
-        latency_ms REAL DEFAULT 0.0,
-        researched_by TEXT DEFAULT 'Web Researcher',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_web_canonical_url ON web_verifications (canonical_url);")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_web_content_hash ON web_verifications (content_hash);")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_web_domain ON web_verifications (domain);")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_web_status ON web_verifications (status);")
-
-    # 3. Speaker Duration Ledger table (Section 9 & 11)
-    # Tracks cumulative accepted duration per speaker with unique constraint
+    # 3. Speaker Duration Ledger table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS speaker_duration_ledger (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         speaker_id TEXT NOT NULL,
         video_id TEXT NOT NULL,
         duration_seconds INTEGER NOT NULL,
@@ -158,10 +291,10 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_speaker ON speaker_duration_ledger (speaker_id);")
 
-    # 4. Decision Audit table (Section 11)
+    # 4. Decision Audit table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS decision_audit (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         candidate_video_id TEXT,
         status TEXT NOT NULL,
         matched_video_id TEXT,
@@ -179,53 +312,71 @@ def init_db():
     # 5. Audit Log table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS audit_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        record_id INTEGER NOT NULL,
+        id SERIAL PRIMARY KEY,
+        record_id BIGINT,
         action TEXT NOT NULL,
         from_status TEXT,
-        to_status TEXT NOT NULL,
-        actor TEXT NOT NULL,
+        to_status TEXT,
+        actor TEXT,
         reason TEXT,
         comments TEXT,
-        timestamp TEXT NOT NULL,
-        FOREIGN KEY(record_id) REFERENCES records(id) ON DELETE CASCADE
+        timestamp TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     """)
+    # Ensure audit_logs columns match if table was pre-existing
+    for col, col_type in [
+        ("record_id", "BIGINT"),
+        ("from_status", "TEXT"),
+        ("to_status", "TEXT"),
+        ("actor", "TEXT"),
+        ("reason", "TEXT"),
+        ("comments", "TEXT"),
+        ("timestamp", "TEXT")
+    ]:
+        cursor.execute(f"ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS {col} {col_type};")
 
-    # 6. Audio Segments table (Section 3 of implementation.md)
+
+
+    # 7. Pipeline Jobs table
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS audio_segments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        record_id INTEGER NOT NULL,
-        segment_index INTEGER NOT NULL,
-        file_name TEXT NOT NULL,
-        audio_path TEXT NOT NULL,
-        relative_url TEXT NOT NULL,
-        transcription TEXT NOT NULL,
-        original_transcription TEXT NOT NULL,
-        duration_seconds REAL DEFAULT 0.0,
-        language TEXT DEFAULT 'english',
+    CREATE TABLE IF NOT EXISTS pipeline_jobs (
+        id SERIAL PRIMARY KEY,
+        record_id INTEGER NOT NULL UNIQUE REFERENCES records(id) ON DELETE CASCADE,
+        job_id TEXT DEFAULT '',
+        file_name TEXT DEFAULT '',
+        audio_link TEXT DEFAULT '',
+        speaker_id TEXT DEFAULT '',
+        speaker_name TEXT DEFAULT '',
         gender TEXT DEFAULT 'auto',
-        validation_status TEXT DEFAULT 'PENDING',
-        rejection_reason TEXT,
-        validated_by TEXT,
-        validated_at TEXT,
+        denoise_model TEXT DEFAULT 'BS-Roformer',
+        asr_model TEXT DEFAULT 'Whisper Large-v3',
+        language TEXT DEFAULT 'English',
+        stage TEXT DEFAULT 'QUEUED',
+        step_id TEXT DEFAULT 'validate',
+        step_index INTEGER DEFAULT 0,
+        total_steps INTEGER DEFAULT 6,
+        step_name TEXT DEFAULT 'Initializing',
+        progress_pct INTEGER DEFAULT 0,
+        started_at TEXT,
+        started_at_display TEXT,
+        finished_at TEXT,
+        elapsed_seconds INTEGER DEFAULT 0,
+        took_formatted TEXT DEFAULT '',
+        segments_count INTEGER DEFAULT 0,
+        error TEXT,
         created_at TEXT NOT NULL,
-        FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
+        updated_at TEXT NOT NULL
     );
     """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_segments_record_id ON audio_segments(record_id);")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_segments_status ON audio_segments(validation_status);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pj_record_id ON pipeline_jobs(record_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pj_stage ON pipeline_jobs(stage);")
 
     conn.commit()
 
-    # Seed illustrative examples if database is brand new
-    cursor.execute("SELECT COUNT(*) as count FROM records")
-    count = cursor.fetchone()["count"]
-    if count == 0:
-        seed_sample_data(conn)
 
-    # 6. Synchronize approved records into speaker_duration_ledger idempotently
+
+    # Synchronize approved records into speaker_duration_ledger idempotently
     cursor.execute("""
         SELECT id, platform_item_id, speakers_id, duration_seconds, updated_at
         FROM records
@@ -239,9 +390,10 @@ def init_db():
         ts = row["updated_at"]
         if spk and dur > 0:
             cursor.execute("""
-                INSERT OR IGNORE INTO speaker_duration_ledger (
+                INSERT INTO speaker_duration_ledger (
                     speaker_id, video_id, duration_seconds, accepted_status, accepted_at
                 ) VALUES (?, ?, ?, 'ACCEPTED', ?)
+                ON CONFLICT (speaker_id, video_id) DO NOTHING
             """, (spk.strip().upper(), v_id, dur, ts))
 
     conn.commit()
@@ -277,9 +429,8 @@ def format_duration(dur_str: str) -> str:
 
 
 def seed_sample_data(conn):
+    """Seeds initial illustrative records into PostgreSQL."""
     cursor = conn.cursor()
-    now_str = datetime.now().isoformat()
-
     sample_records = [
         {
             "research_date": "2026-10-15",
@@ -391,21 +542,17 @@ def seed_sample_data(conn):
         # Insert into speaker duration ledger if approved
         if rec["status"] == "APPROVED":
             cursor.execute("""
-                INSERT OR IGNORE INTO speaker_duration_ledger (
+                INSERT INTO speaker_duration_ledger (
                     speaker_id, video_id, duration_seconds, accepted_status, accepted_at
                 ) VALUES (?, ?, ?, 'ACCEPTED', ?)
+                ON CONFLICT (speaker_id, video_id) DO NOTHING
             """, (rec["speakers_id"], rec["platform_item_id"], rec["duration_seconds"], rec["updated_at"]))
 
     conn.commit()
 
 
 def upsert_web_verification(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Stage 8: Store the decision idempotently.
-    Saves the result, evidence, and matched record.
-    If the canonical_url already exists, updates the existing row with new evaluation data,
-    guaranteeing that repeated processing does not create duplicate rows.
-    """
+    """Stores or updates a web verification record idempotently."""
     conn = get_connection()
     cursor = conn.cursor()
     now_iso = datetime.now().isoformat()
@@ -617,14 +764,10 @@ def get_web_verification_by_id(record_id: int) -> Optional[Dict[str, Any]]:
 
 
 def get_all_stored_web_and_records() -> List[Dict[str, Any]]:
-    """
-    Combines records from both `records` and `web_verifications` tables
-    to provide comprehensive cross-table duplicate checking.
-    """
+    """Returns stored intake records for duplicate checking."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    # 1. Video / Intake records
     cursor.execute("""
         SELECT id, platform_item_id, title, channel_name, description, source,
                audio_link, canonical_url, before_processing_duration, duration_seconds,
@@ -632,17 +775,31 @@ def get_all_stored_web_and_records() -> List[Dict[str, Any]]:
         FROM records
     """)
     video_records = [dict(r) for r in cursor.fetchall()]
-
-    # 2. Web verification records
-    cursor.execute("""
-        SELECT id, canonical_url, title, domain as channel_name, description,
-               'Web' as source, url as audio_link, canonical_url,
-               author, publication_date, headings, normalized_text, passages,
-               content_hash, status, researched_by, '00:00:00' as before_processing_duration,
-               0 as duration_seconds
-        FROM web_verifications
-    """)
-    web_records = [dict(r) for r in cursor.fetchall()]
-
     conn.close()
-    return video_records + web_records
+    return video_records
+
+
+def flush_database() -> Dict[str, int]:
+    """Truncates all transactional and record data tables, resetting identity sequences."""
+    tables_to_flush = [
+        "pipeline_jobs",
+        "records",
+        "audit_logs",
+        "decision_audit",
+        "speaker_duration_ledger"
+    ]
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
+    existing_tables = set(r[0] for r in cur.fetchall())
+    valid_tables = [t for t in tables_to_flush if t in existing_tables]
+    if valid_tables:
+        cur.execute(f"TRUNCATE TABLE {', '.join(valid_tables)} RESTART IDENTITY CASCADE;")
+        conn.commit()
+    counts = {}
+    for t in valid_tables:
+        cur.execute(f"SELECT COUNT(*) FROM {t}")
+        counts[t] = cur.fetchone()[0]
+    conn.close()
+    return counts
+

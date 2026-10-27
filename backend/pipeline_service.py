@@ -53,32 +53,10 @@ _pipeline_jobs: Dict[int, Dict[str, Any]] = {}
 # ── Database helpers ──────────────────────────────────────────────────────────
 
 def ensure_audio_segments_table():
-    """Idempotently creates/migrates the audio_segments table and pipeline_jobs table."""
+    """Idempotently creates/migrates the pipeline_jobs table."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.executescript("""
-        CREATE TABLE IF NOT EXISTS audio_segments (
-            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-            record_id            INTEGER NOT NULL,
-            segment_index        INTEGER NOT NULL,
-            file_name            TEXT NOT NULL,
-            audio_path           TEXT NOT NULL,
-            relative_url         TEXT NOT NULL,
-            transcription        TEXT NOT NULL DEFAULT '',
-            original_transcription TEXT NOT NULL DEFAULT '',
-            duration_seconds     REAL DEFAULT 0.0,
-            language             TEXT DEFAULT 'english',
-            gender               TEXT DEFAULT 'auto',
-            validation_status    TEXT DEFAULT 'PENDING',
-            rejection_reason     TEXT,
-            validated_by         TEXT,
-            validated_at         TEXT,
-            created_at           TEXT NOT NULL,
-            FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_seg_record_id ON audio_segments(record_id);
-        CREATE INDEX IF NOT EXISTS idx_seg_status    ON audio_segments(validation_status);
-
         CREATE TABLE IF NOT EXISTS pipeline_jobs (
             id                   INTEGER PRIMARY KEY AUTOINCREMENT,
             record_id            INTEGER NOT NULL UNIQUE,
@@ -211,8 +189,7 @@ def get_all_pipeline_jobs() -> List[Dict[str, Any]]:
         step_index = 1 if stage == "PROCESSING" else 5
         step_name = "Processing in background..." if stage == "PROCESSING" else "Finished"
 
-        cursor.execute("SELECT COUNT(*) FROM audio_segments WHERE record_id = ?", (rec_id,))
-        seg_cnt = cursor.fetchone()[0]
+        seg_cnt = 0
 
         cursor.execute("""
             INSERT OR REPLACE INTO pipeline_jobs
@@ -285,15 +262,7 @@ def get_wav_duration(wav_path: str) -> float:
 
 
 def get_segments(record_id: int) -> List[Dict[str, Any]]:
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT * FROM audio_segments WHERE record_id = ? ORDER BY segment_index ASC",
-        (record_id,)
-    )
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-    return rows
+    return []
 
 
 def validate_segment(

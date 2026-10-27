@@ -12,7 +12,7 @@ import httpx
 # ============================================================
 # CONFIG -- edit these values, then run the script
 # ============================================================
-BASE_URL = "http://111.118.177.236:8008/"   # <-- put your real server address and port here
+BASE_URL = ""   # <-- put your real server address and port here
 
 # Which endpoint to call. Choose one:
 #   "validate-audio", "convert-audio", "denoise", "vad-segment",

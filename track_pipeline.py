@@ -13,7 +13,7 @@ import sys
 import os
 import time
 import argparse
-import sqlite3
+from backend.database import get_connection
 from datetime import datetime
 
 # Windows console UTF-8 fix
@@ -47,11 +47,8 @@ CLR_BG_DARK = "\033[48;5;236m"
 
 
 def get_jobs_from_db():
-    if not os.path.exists(DB_PATH):
-        return []
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection()
         c = conn.cursor()
         c.execute("""
             SELECT pj.*, r.status as record_status, r.description as record_desc,
@@ -112,7 +109,7 @@ def render_dashboard():
     out = []
     out.append(f"{CLR_BOLD}{CLR_CYAN}========================================================================================{CLR_RESET}")
     out.append(f"{CLR_BOLD}  🎧 AUDIO PROCESSING PIPELINE — LIVE TERMINAL TRACKER{CLR_RESET}   {CLR_GRAY}[{now_str}]{CLR_RESET}")
-    out.append(f"  Endpoint: http://111.118.177.236:8008  |  Local DB: audio_workflow.db")
+    out.append(f"  Endpoint: http://111.118.177.236:8008  |  DB: PostgreSQL (tts_research)")
     out.append(f"{CLR_BOLD}{CLR_CYAN}========================================================================================{CLR_RESET}")
     out.append(f"  {CLR_BOLD}Active Jobs: {CLR_YELLOW}{len(running_jobs)}{CLR_RESET}  |  {CLR_BOLD}Completed: {CLR_GREEN}{len(done_jobs)}{CLR_RESET}  |  {CLR_BOLD}Failed: {CLR_RED}{len(failed_jobs)}{CLR_RESET}  |  {CLR_BOLD}Total Tracked: {len(jobs)}{CLR_RESET}")
     out.append(f"{CLR_GRAY}----------------------------------------------------------------------------------------{CLR_RESET}")

@@ -784,25 +784,31 @@
               <table class="data-table" id="approved-table">
                 <thead>
                   <tr>
-                    <th title="Sorted: Current date at top">Date (DD/MM/YYYY) <i
+                    <th title="Sorted: Current date at top">Research Date <i
                         class="fa-solid fa-arrow-down-wide-short text-emerald"></i></th>
+                    <th>Completion_date</th>
                     <th>Source</th>
                     <th>Audio_Link</th>
                     <th>Text_Link</th>
                     <th>Description</th>
                     <th>Dataset Name</th>
                     <th>Gender</th>
-                    <th>Duration</th>
+                    <th>Before_Processing_Duration</th>
+                    <th>After_Processing_Duration</th>
+                    <th>Total_files</th>
+                    <th>Researched_By</th>
+                    <th>Assigned_to</th>
+                    <th>Status</th>
+                    <th>Data_type (Augmentation_Status)</th>
+                    <th>Data_available</th>
                     <th>Speakers_ID</th>
                     <th>Speaker/Channel_Name</th>
                     <th>Accent</th>
                     <th>Licensing</th>
-                    <th>Researched_By</th>
-                    <th>Assigned_to</th>
                     <th>Handover</th>
+                    <th>Remark</th>
                     <th>Audit</th>
                     <th>Pipeline</th>
-
                   </tr>
                 </thead>
                 <tbody id="approved-tbody"></tbody>
@@ -1231,18 +1237,30 @@
   <!-- MODAL: CSV PREVIEW (DDMMYY)                    -->
   <!-- ============================================== -->
   <div id="modal-csv-preview" class="modal-overlay hidden">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog" style="max-width: 95vw; width: 1350px;">
       <div class="modal-header">
         <h3 class="modal-title"><i class="fa-solid fa-file-csv"></i> Approved CSV Export Preview (22 Columns)</h3>
         <button class="modal-close-btn" id="modal-csv-close">&times;</button>
       </div>
       <div class="modal-body">
-        <div class="csv-banner-clean">
-          <div><i class="fa-solid fa-circle-check text-emerald"></i> Exact 22 Production Columns &bull; Format
-            DD/MM/YYYY &bull; UTF-8</div>
-          <strong id="preview-record-count">0 Records</strong>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.85rem; gap: 1rem; flex-wrap: wrap;">
+          <div class="csv-banner-clean" style="margin-bottom: 0; flex: 1;">
+            <div><i class="fa-solid fa-circle-check text-emerald"></i> Exact 22 Production Columns &bull; Format DD/MM/YYYY &bull; UTF-8</div>
+            <strong id="preview-record-count">0 Records</strong>
+          </div>
+          <div style="display: flex; gap: 0.35rem;">
+            <button type="button" class="btn btn-sm btn-primary" id="btn-preview-view-table"><i class="fa-solid fa-table"></i> Table View</button>
+            <button type="button" class="btn btn-sm btn-secondary" id="btn-preview-view-raw"><i class="fa-solid fa-code"></i> Raw CSV</button>
+          </div>
         </div>
-        <pre class="csv-code-box font-mono" id="csv-preview-content"></pre>
+
+        <div id="csv-preview-table-wrapper" style="max-height: 480px; overflow: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: #ffffff;">
+          <table class="data-table" id="csv-preview-table" style="font-size: 0.8rem; width: 100%; min-width: 2200px;">
+            <thead id="csv-preview-thead"></thead>
+            <tbody id="csv-preview-tbody"></tbody>
+          </table>
+        </div>
+        <pre class="csv-code-box font-mono hidden" id="csv-preview-content" style="max-height: 480px;"></pre>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="btn-close-csv-preview">Close</button>

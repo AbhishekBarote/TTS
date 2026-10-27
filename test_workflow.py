@@ -27,6 +27,25 @@ def run_tests():
     print("  VERIFYING FINAL IMPLEMENTATION ARCHITECTURE ACCEPTANCE CRITERIA")
     print("=" * 75)
 
+    # Seed initial test record for duplicate matching criteria
+    client.post("/api/records", json={
+        "research_date": "2026-10-15",
+        "source": "YouTube",
+        "audio_link": "https://www.youtube.com/watch?v=EXAMPLE001",
+        "title": "Indian English lecture containing spoken Sanskrit terms",
+        "channel_name": "swapnalok",
+        "description": "Indian English lecture containing spoken Sanskrit terms\nchannel : swapnalok",
+        "gender": "Male",
+        "before_processing_duration": "00:18:35",
+        "accent": "Indian English",
+        "licensing": "CC BY",
+        "licensing_evidence": "Description says CC BY",
+        "sanskrit_evidence": "Contains Sanskrit terms",
+        "speakers_id": "SPK_TEST_01",
+        "researched_by": "Researcher_A",
+        "action": "SEND_FOR_REVIEW"
+    })
+
     # --------------------------------------------------------------------------
     # CRITERION 1: Exact video ID matches are detected without calling the LLM
     # --------------------------------------------------------------------------
@@ -208,7 +227,7 @@ def run_tests():
     print("[PASS] Criteria 8 & 9: Video exceeding 12,600s speaker cap strictly blocked with 400.")
 
     # --------------------------------------------------------------------------
-    # CRITERION 10: Reprocessing a video does not create duplicate rows or double-count duration (Idempotency)
+    # CRITERION 10: CSV import allows importing without duplicate rejection
     # --------------------------------------------------------------------------
     csv_idempotency_sample = (
         "Research_Date,Source,Audio_Link,Description,Gender,Before Processing Duration,Accent,Licensing,Speakers_ID,Researched_By,Revalidated_By\n"
@@ -217,19 +236,14 @@ def run_tests():
     # First upload
     res1 = client.post("/api/upload-csv", json={"csv_text": csv_idempotency_sample, "target_status": "APPROVED"})
     assert res1.status_code == 200
-    # Second upload of the EXACT same record
+    assert res1.json()["imported"] == 1
+    # Second upload of the record (duplication check removed)
     res2 = client.post("/api/upload-csv", json={"csv_text": csv_idempotency_sample, "target_status": "APPROVED"})
     assert res2.status_code == 200
     data2 = res2.json()
-    assert data2["skipped_duplicates"] >= 1, "Duplicate row in re-upload must be skipped"
-    assert data2["imported"] == 0, "No duplicate rows should be imported"
-
-    # Check speaker ledger: duration must be exactly 1,200s (20 mins), NOT double-counted!
-    spk_dur_res = client.get("/api/speakers/SPK_IDEM_1/duration")
-    assert spk_dur_res.status_code == 200
-    ledger_data = spk_dur_res.json()
-    assert ledger_data["current_accepted_seconds"] == 1200, f"Expected 1200s, got {ledger_data['current_accepted_seconds']}s (double counted!)"
-    print("[PASS] Criterion 10: Idempotency verified. Reprocessing did not duplicate rows or double-count duration.")
+    assert data2["skipped_duplicates"] == 0, "No duplicate check when importing CSV"
+    assert data2["imported"] == 1, "Rows imported without duplicate rejection"
+    print("[PASS] Criterion 10: CSV import without duplicate check verified.")
 
     # --------------------------------------------------------------------------
     # CRITERION 11: Production 22-column CSV schema strictly maintained

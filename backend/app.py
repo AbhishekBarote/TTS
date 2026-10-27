@@ -5,6 +5,7 @@ defined in final_implementation_architecture.md.
 """
 
 import os
+import re
 import io
 import csv
 import json
@@ -31,7 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.database import (
     init_db, get_connection, format_duration, duration_to_seconds,
     upsert_web_verification, get_web_verifications, get_web_verification_by_id,
-    get_all_stored_web_and_records
+    get_all_stored_web_and_records, flush_database
 )
 from backend.duplicate import (
     canonicalize_url, extract_platform_and_item_id, fast_prefilter, check_similarity
@@ -94,29 +95,33 @@ def format_to_slash_date(date_str: Optional[str]) -> str:
     if not date_str:
         return ""
     date_clean = str(date_str).strip()
-    if "/" in date_clean:
-        parts = date_clean.split("/")
-        if len(parts) == 3:
-            if len(parts[0]) == 4:  # YYYY/MM/DD
-                return f"{int(parts[2]):02d}/{int(parts[1]):02d}/{parts[0]}"
-            elif len(parts[2]) == 4:  # DD/MM/YYYY
-                return f"{int(parts[0]):02d}/{int(parts[1]):02d}/{parts[2]}"
-            elif len(parts[2]) == 2:  # DD/MM/YY
-                return f"{int(parts[0]):02d}/{int(parts[1]):02d}/20{parts[2]}"
-    if "-" in date_clean:
-        parts = date_clean.split("-")
-        if len(parts) == 3:
-            if len(parts[0]) == 4:  # YYYY-MM-DD
-                return f"{int(parts[2]):02d}/{int(parts[1]):02d}/{parts[0]}"
-            elif len(parts[2]) == 4:  # DD-MM-YYYY
-                return f"{int(parts[0]):02d}/{int(parts[1]):02d}/{parts[2]}"
-            elif len(parts[2]) == 2:  # DD-MM-YY
-                return f"{int(parts[0]):02d}/{int(parts[1]):02d}/20{parts[2]}"
-    if len(date_clean) == 6 and date_clean.isdigit():
-        return f"{date_clean[:2]}/{date_clean[2:4]}/20{date_clean[4:]}"
-    if len(date_clean) == 8 and date_clean.isdigit():
-        return f"{date_clean[6:]}/{date_clean[4:6]}/{date_clean[:4]}"
+    try:
+        if "/" in date_clean:
+            parts = date_clean.split("/")
+            if len(parts) == 3:
+                if len(parts[0]) == 4:  # YYYY/MM/DD
+                    return f"{int(parts[2]):02d}/{int(parts[1]):02d}/{parts[0]}"
+                elif len(parts[2]) == 4:  # DD/MM/YYYY
+                    return f"{int(parts[0]):02d}/{int(parts[1]):02d}/{parts[2]}"
+                elif len(parts[2]) == 2:  # DD/MM/YY
+                    return f"{int(parts[0]):02d}/{int(parts[1]):02d}/20{parts[2]}"
+        if "-" in date_clean:
+            parts = date_clean.split("-")
+            if len(parts) == 3:
+                if len(parts[0]) == 4:  # YYYY-MM-DD
+                    return f"{int(parts[2]):02d}/{int(parts[1]):02d}/{parts[0]}"
+                elif len(parts[2]) == 4:  # DD-MM-YYYY
+                    return f"{int(parts[0]):02d}/{int(parts[1]):02d}/{parts[2]}"
+                elif len(parts[2]) == 2:  # DD-MM-YY
+                    return f"{int(parts[0]):02d}/{int(parts[1]):02d}/20{parts[2]}"
+        if len(date_clean) == 6 and date_clean.isdigit():
+            return f"{date_clean[:2]}/{date_clean[2:4]}/20{date_clean[4:]}"
+        if len(date_clean) == 8 and date_clean.isdigit():
+            return f"{date_clean[6:]}/{date_clean[4:6]}/{date_clean[:4]}"
+    except Exception:
+        pass
     return date_clean
+
 
 # Initialize database tables and migrations
 init_db()
@@ -364,11 +369,6 @@ def create_record(req: RecordCreateRequest):
         cursor.execute("SELECT * FROM records WHERE source = ? AND platform_item_id = ?", (source_name, platform_item_id))
         duplicate = cursor.fetchone()
 
-    if not duplicate:
-        cursor.execute("SELECT * FROM web_verifications WHERE canonical_url = ?", (canonical_url,))
-        web_dup = cursor.fetchone()
-        if web_dup:
-            duplicate = web_dup
 
     if duplicate:
         conn.close()
@@ -984,7 +984,7 @@ def list_records(
 
     if status_filter and status_filter.upper() != "ALL":
         if status_filter.upper() == "APPROVED":
-            query += " AND status IN ('APPROVED', 'PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED')"
+            query += " AND status IN ('APPROVED', 'PIPELINE_PROCESSING', 'PIPELINE_FAILED', 'VALIDATION_READY', 'COMPLETED')"
         else:
             query += " AND status = ?"
             params.append(status_filter.upper())
@@ -1009,7 +1009,7 @@ def list_records(
         )"""
         params.extend([search_like] * 6)
 
-    query += " ORDER BY research_date DESC, id DESC"
+    query += " ORDER BY id DESC"
     cursor.execute(query, params)
     records = []
     for r in cursor.fetchall():
@@ -1168,11 +1168,11 @@ CSV_EXPORT_COLUMNS = [
 def find_row_val(row: Dict[str, str], aliases: List[str], default: str = "") -> str:
     """Helper to find value in row with flexible column name aliases."""
     row_normalized = {
-        k.strip().lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_"): v 
+        re.sub(r'[^a-z0-9]', '', str(k).lower()): v 
         for k, v in row.items() if k
     }
     for alias in aliases:
-        clean = alias.strip().lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
+        clean = re.sub(r'[^a-z0-9]', '', str(alias).lower())
         if clean in row_normalized and row_normalized[clean] is not None and str(row_normalized[clean]).strip():
             return str(row_normalized[clean]).strip()
     return default
@@ -1181,11 +1181,10 @@ def find_row_val(row: Dict[str, str], aliases: List[str], default: str = "") -> 
 @app.post("/api/upload-csv")
 def upload_csv_data(req: CsvUploadRequest):
     """
-    Imports historical records with strict de-duplication:
-    1. Exact video ID & canonical URL matching skips duplicate rows.
-    2. Enforces speaker duration limit for approved historical records.
-    3. Atomically updates speaker_duration_ledger.
-    4. Supports full 22-column production schema and legacy 11-column formats.
+    Imports historical records directly into the database as APPROVED:
+    1. Every record in the CSV is ingested as APPROVED without dropping or rejecting rows.
+    2. Atomically updates speaker_duration_ledger.
+    3. Supports full 22-column production schema and variant CSV formats.
     """
     csv_text = (req.csv_text or "").strip()
     if not csv_text:
@@ -1193,8 +1192,6 @@ def upload_csv_data(req: CsvUploadRequest):
 
     if csv_text.startswith("\ufeff"):
         csv_text = csv_text[1:]
-
-    target_status = req.target_status or "APPROVED"
 
     try:
         reader = csv.DictReader(io.StringIO(csv_text))
@@ -1206,42 +1203,27 @@ def upload_csv_data(req: CsvUploadRequest):
 
     total_rows = 0
     imported_count = 0
-    skipped_duplicates = 0
-    duplicate_items = []
     now_iso = datetime.now().isoformat()
 
     for row in reader:
+        # Ignore completely empty rows
+        if not any(v and str(v).strip() for v in row.values() if v is not None):
+            continue
+
         total_rows += 1
         audio_link = find_row_val(row, [
             "audio_link", "audiolink", "audio/video link", "audio_video_link",
             "audio/video_link", "video_link", "videolink", "url", "link",
             "audio_url", "recording_url"
-        ])
-        if not audio_link:
-            continue
+        ], default="")
 
-        canonical_url = canonicalize_url(audio_link)
-        platform, platform_item_id = extract_platform_and_item_id(audio_link)
-
-        source_val = find_row_val(row, ["source", "platform", "website"], default=platform or "Youtube")
-        desc_val = find_row_val(row, ["description", "title", "content"], default="Historical entry")
-        gender_val = find_row_val(row, ["gender", "sex"], default="Unspecified")
-        raw_dur = find_row_val(row, [
-            "before_processing_duration", "before-processing duration",
-            "before_processing duration", "duration", "duration_seconds",
-            "duration (seconds)", "duration seconds", "length"
-        ], default="00:15:00")
-        formatted_dur = format_duration(raw_dur)
-        dur_seconds = duration_to_seconds(formatted_dur)
-        accent_val = find_row_val(row, ["accent", "language_accent"], default="Normal Accent")
-        licensing_val = find_row_val(row, ["licensing", "license", "rights"], default="CC")
+        source_val = find_row_val(row, ["source", "platform", "website"], default="")
         spk_channel_val = find_row_val(row, [
             "speaker/channel_name", "speaker / channel_name", "speaker_channel_name",
-            "speaker_name", "speaker name", "channel_name", "channel"
+            "speaker channel name", "speaker_name", "speaker name", "channel_name", "channel"
         ], default="").strip()
         spk_val = find_row_val(row, [
-            "speakers_id", "speaker_id", "speakerid", "speakers id", "speaker id",
-            "speaker_name", "speaker name", "speaker"
+            "speakers_id", "speaker_id", "speakerid", "speakers id", "speaker id"
         ], default="").strip()
 
         # If speakers_id was not explicitly provided, use speaker_channel_name
@@ -1250,48 +1232,47 @@ def upload_csv_data(req: CsvUploadRequest):
         if not spk_channel_val:
             spk_channel_val = spk_val
 
-        researched_by_val = find_row_val(row, ["researched_by", "researchedby", "researcher", "submitted_by"], default="Historical_Data")
-        revalidated_by_val = find_row_val(row, ["revalidated_by", "revalidatedby", "reviewer", "verified_by"], default="Historical_Reviewer")
-        research_date_val = find_row_val(row, ["date", "research_date", "researchdate"], default=datetime.now().strftime("%Y-%m-%d"))
+        if audio_link:
+            canonical_url = canonicalize_url(audio_link)
+            platform, platform_item_id = extract_platform_and_item_id(audio_link)
+            if not source_val:
+                source_val = platform or "Youtube"
+        else:
+            canonical_url = f"local://{source_val.lower().replace(' ', '_') or 'augmented'}/{spk_val}_{total_rows:04d}"
+            platform, platform_item_id = (source_val or "Local", f"LOCAL_{total_rows:04d}")
+            if not source_val:
+                source_val = "Local"
 
-        completion_date_val = find_row_val(row, ["completion_date", "completiondate"], default="")
-        text_link_val = find_row_val(row, ["text_link", "textlink"], default="ASR")
-        dataset_name_val = find_row_val(row, ["dataset_name", "dataset name", "dataset"], default="")
-        after_dur_val = find_row_val(row, ["after_processing_duration", "after_processing duration"], default="0:00:00")
-        total_files_val = find_row_val(row, ["total_files", "totalfiles"], default="")
-        assigned_to_val = find_row_val(row, ["assigned_to", "assignedto"], default=researched_by_val)
-        status_val = find_row_val(row, ["status"], default=target_status).strip().upper()
+        desc_val = find_row_val(row, ["description", "title", "content"], default="Historical entry")
+        gender_val = find_row_val(row, ["gender", "sex"], default="Unspecified")
+        raw_dur = find_row_val(row, [
+            "before_processing_duration", "before-processing duration",
+            "before_processing duration", "duration", "duration_seconds",
+            "duration (seconds)", "duration seconds", "length"
+        ], default="00:15:00")
+        formatted_dur = format_duration(raw_dur) if raw_dur else "00:00:00"
+        dur_seconds = duration_to_seconds(formatted_dur)
+        accent_val = find_row_val(row, ["accent", "language_accent"], default="Normal Accent")
+        licensing_val = find_row_val(row, ["licensing", "license", "rights"], default="CC")
+
+        researched_by_val = find_row_val(row, ["researched_by", "researchedby", "researched by", "researcher", "submitted_by"], default="Historical_Data")
+        revalidated_by_val = find_row_val(row, ["revalidated_by", "revalidatedby", "revalidated by", "reviewer", "verified_by"], default="Historical_Reviewer")
+        research_date_val = find_row_val(row, ["date", "research_date", "researchdate", "research date"], default=datetime.now().strftime("%Y-%m-%d"))
+
+        completion_date_val = find_row_val(row, ["completion_date", "completiondate", "completion date", "completed_date"], default="")
+        text_link_val = find_row_val(row, ["text_link", "textlink", "text link", "text_url", "transcript_link", "text"], default="ASR")
+        dataset_name_val = find_row_val(row, ["dataset_name", "dataset name", "dataset", "data_set"], default="")
+        after_dur_val = find_row_val(row, ["after_processing_duration", "after_processing duration", "after-processing duration", "after processing duration", "after_duration", "after_processing"], default="0:00:00")
+        total_files_val = find_row_val(row, ["total_files", "totalfiles", "total files", "total_file", "files"], default="")
+        assigned_to_val = find_row_val(row, ["assigned_to", "assignedto", "assigned to", "assignee"], default=researched_by_val)
         data_type_val = find_row_val(row, ["data_type_augmentation_status", "data_type (augmentation_status)", "data_type", "augmentation_status"], default="Original")
-        data_available_val = find_row_val(row, ["data_available", "dataavailable"], default="Lightining AV/HF")
-        handover_val = find_row_val(row, ["handover"], default="No")
-        remark_val = find_row_val(row, ["remark", "remarks", "notes", "comment", "comments"], default="")
+        data_available_val = find_row_val(row, ["data_available", "dataavailable", "data available"], default="Lightining AV/HF")
+        handover_val = find_row_val(row, ["handover", "hand_over", "hand over"], default="No")
+        remark_val = find_row_val(row, ["remark", "remarks", "notes", "comment", "comments", "note"], default="")
 
-        # Exact duplicate check
-        cursor.execute("SELECT id, speakers_id, audio_link, status FROM records WHERE canonical_url = ?", (canonical_url,))
-        existing = cursor.fetchone()
-
-        if not existing and platform_item_id and platform in ("YouTube", "Internet Archive", "Vimeo"):
-            cursor.execute("SELECT id, speakers_id, audio_link, status FROM records WHERE source = ? AND platform_item_id = ?", (source_val, platform_item_id))
-            existing = cursor.fetchone()
-
-        if existing:
-            skipped_duplicates += 1
-            duplicate_items.append({
-                "url": audio_link,
-                "existing_id": existing["id"],
-                "speakers_id": existing["speakers_id"],
-                "status": existing["status"]
-            })
-            continue
-
-        # Check speaker duration cap if importing as approved
-        actual_status = status_val if status_val in ("APPROVED", "PENDING_REVALIDATION", "REJECTED_BY_RESEARCHER", "REJECTED_AT_REVALIDATION") else target_status
+        # All rows imported via CSV are marked APPROVED as requested
+        actual_status = "APPROVED"
         rej_reason = None
-        if actual_status == "APPROVED":
-            cap_check = validate_speaker_duration_cap(conn, spk_val, dur_seconds)
-            if not cap_check["is_valid"]:
-                actual_status = "PENDING_REVALIDATION"
-                rej_reason = "Flagged: would exceed 3.5h speaker cap during batch import."
 
         derived_title = desc_val.split("\n")[0] if desc_val else "Historical Audio"
         if not dataset_name_val:
@@ -1314,7 +1295,7 @@ def upload_csv_data(req: CsvUploadRequest):
             research_date_val, source_val, audio_link, canonical_url, platform_item_id,
             derived_title, spk_channel_val, desc_val, gender_val, formatted_dur, dur_seconds,
             accent_val, licensing_val, "Imported from CSV dataset", "",
-            spk_val, researched_by_val, revalidated_by_val if actual_status == "APPROVED" else None,
+            spk_val, researched_by_val, revalidated_by_val or "Historical_Reviewer",
             actual_status, "UNIQUE", rej_reason,
             completion_date_val, text_link_val, dataset_name_val, after_dur_val, total_files_val,
             assigned_to_val, data_type_val, data_available_val, spk_channel_val,
@@ -1331,11 +1312,10 @@ def upload_csv_data(req: CsvUploadRequest):
             researched_by_val, rej_reason, "Imported from dataset", now_iso
         ))
 
-        # Update ledger if approved
-        if actual_status == "APPROVED":
-            record_accepted_duration_atomically(
-                conn, spk_val, platform_item_id or str(record_id), dur_seconds
-            )
+        # Update ledger for approved record
+        record_accepted_duration_atomically(
+            conn, spk_val, f"REC_{record_id}", dur_seconds
+        )
 
         imported_count += 1
 
@@ -1346,9 +1326,17 @@ def upload_csv_data(req: CsvUploadRequest):
     return {
         "total_rows": total_rows,
         "imported": imported_count,
-        "skipped_duplicates": skipped_duplicates,
-        "duplicates": duplicate_items[:10]
+        "skipped_duplicates": 0,
+        "duplicates": []
     }
+
+
+@app.post("/api/admin/flush-database")
+def admin_flush_database():
+    """Flushes all transactional and records data from the database."""
+    counts = flush_database()
+    return {"status": "success", "message": "Database flushed successfully", "tables": counts}
+
 
 
 # ==============================================================================
@@ -1369,26 +1357,17 @@ def export_approved_csv():
 
     cursor.execute("""
         SELECT * FROM records
-        WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED')
-        ORDER BY research_date DESC, id DESC
+        WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'PIPELINE_FAILED', 'VALIDATION_READY', 'COMPLETED')
+        ORDER BY id DESC
     """)
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
-
-    seen_urls = set()
-    deduped_rows = []
-    for r in rows:
-        canon = r.get("canonical_url")
-        if canon in seen_urls:
-            continue
-        seen_urls.add(canon)
-        deduped_rows.append(r)
 
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL, lineterminator='\r\n')
     writer.writerow(CSV_EXPORT_COLUMNS)
 
-    for r in deduped_rows:
+    for r in rows:
         date_val = format_to_slash_date(r.get("research_date"))
         completion_val = format_to_slash_date(r.get("completion_date")) or ""
         source_val = r.get("source") or "Youtube"
@@ -1456,24 +1435,17 @@ def preview_approved_csv():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT * FROM records WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED') ORDER BY research_date DESC, id DESC
+        SELECT * FROM records WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'PIPELINE_FAILED', 'VALIDATION_READY', 'COMPLETED') ORDER BY id DESC
     """)
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
-
-    seen_urls = set()
-    deduped = []
-    for r in rows:
-        if r["canonical_url"] not in seen_urls:
-            seen_urls.add(r["canonical_url"])
-            deduped.append(r)
 
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')
     writer.writerow(CSV_EXPORT_COLUMNS)
 
     preview_rows = []
-    for r in deduped:
+    for r in rows:
         date_val = format_to_slash_date(r.get("research_date"))
         completion_val = format_to_slash_date(r.get("completion_date")) or ""
         source_val = r.get("source") or "Youtube"
@@ -1531,7 +1503,7 @@ def preview_approved_csv():
         })
 
     return {
-        "count": len(deduped),
+        "count": len(rows),
         "columns": CSV_EXPORT_COLUMNS,
         "csv_text": output.getvalue(),
         "rows": preview_rows
@@ -1551,10 +1523,10 @@ def get_stats():
     cursor.execute("SELECT status, COUNT(*) as count FROM records GROUP BY status")
     status_counts = {r["status"]: r["count"] for r in cursor.fetchall()}
 
-    cursor.execute("SELECT COUNT(DISTINCT speakers_id) as count FROM records WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED')")
+    cursor.execute("SELECT COUNT(DISTINCT speakers_id) as count FROM records WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'PIPELINE_FAILED', 'VALIDATION_READY', 'COMPLETED')")
     approved_speakers = cursor.fetchone()["count"]
 
-    cursor.execute("SELECT SUM(duration_seconds) as total_sec FROM records WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED')")
+    cursor.execute("SELECT SUM(duration_seconds) as total_sec FROM records WHERE status IN ('APPROVED', 'PIPELINE_PROCESSING', 'PIPELINE_FAILED', 'VALIDATION_READY', 'COMPLETED')")
     total_approved_sec = cursor.fetchone()["total_sec"] or 0
 
     total_h = total_approved_sec // 3600
@@ -1577,7 +1549,7 @@ def get_stats():
     conn.close()
     approved_hours_dec = round(total_approved_sec / 3600.0, 1)
     total_all = sum(status_counts.values())
-    approved_count = sum(status_counts.get(s, 0) for s in ("APPROVED", "PIPELINE_PROCESSING", "VALIDATION_READY", "COMPLETED"))
+    approved_count = sum(status_counts.get(s, 0) for s in ("APPROVED", "PIPELINE_PROCESSING", "PIPELINE_FAILED", "VALIDATION_READY", "COMPLETED"))
 
     return {
         "pending_revalidation": status_counts.get("PENDING_REVALIDATION", 0),

@@ -137,10 +137,22 @@ def download_audio(
     tmp_stem = f"tmp_{record_id}_{int(time.time())}"
     tmp_out_template = str(tmp_dir / f"{tmp_stem}.%(ext)s")
 
+    raw_url = str(url or "").strip()
+    match = re.search(r'(https?://[^\s]+)', raw_url)
+    clean_url = match.group(1) if match else ""
+    if not clean_url:
+        return {
+            "success": False,
+            "file_path": None,
+            "duration_seconds": 0.0,
+            "file_size_bytes": 0,
+            "error": f"Invalid or non-HTTP audio URL: {raw_url[:100]}"
+        }
+
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            print(f"📥 [Record {record_id}] Downloading audio from URL: {url} (Attempt {attempt}/{MAX_RETRIES})", flush=True)
+            print(f"📥 [Record {record_id}] Downloading audio from URL: {clean_url} (Attempt {attempt}/{MAX_RETRIES})", flush=True)
             # Use yt-dlp CLI to download best audio stream
             import yt_dlp
 
@@ -160,7 +172,7 @@ def download_audio(
             }
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
+                info = ydl.extract_info(clean_url, download=True)
                 raw_duration = float(info.get("duration") or 0.0)
 
             # Find the downloaded file

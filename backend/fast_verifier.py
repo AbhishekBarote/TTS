@@ -521,14 +521,7 @@ def execute_fast_verification(
         exact_reason = f"Exact duplicate: Canonical URL matches Record #{exact_record['id']} in database."
         evidence_fields.append("exact_canonical_url")
 
-    # Check 2: Canonical URL in web_verifications
-    if not exact_record:
-        cursor.execute("SELECT * FROM web_verifications WHERE canonical_url = ?", (final_canonical,))
-        row = cursor.fetchone()
-        if row:
-            exact_record = dict(row)
-            exact_reason = f"Exact duplicate: Canonical URL matches Web Record #{exact_record['id']} in database."
-            evidence_fields.append("exact_canonical_url")
+
 
     # Check 3: Platform Item ID (YouTube / Vimeo / Archive)
     if not exact_record and platform_item_id and platform in ("YouTube", "Internet Archive", "Vimeo"):
@@ -539,14 +532,7 @@ def execute_fast_verification(
             exact_reason = f"Exact duplicate: Media ID '{platform_item_id}' already registered (Record #{exact_record['id']})."
             evidence_fields.append("exact_platform_item_id")
 
-    # Check 4: Exact Content Hash (SHA-256)
-    if not exact_record and content_hash:
-        cursor.execute("SELECT * FROM web_verifications WHERE content_hash = ?", (content_hash,))
-        row = cursor.fetchone()
-        if row:
-            exact_record = dict(row)
-            exact_reason = f"Exact duplicate: Identical SHA-256 content hash with Web Record #{exact_record['id']}."
-            evidence_fields.append("exact_sha256_content_hash")
+
 
     if not exact_record and content_hash:
         cursor.execute("SELECT * FROM records WHERE content_hash = ?", (content_hash,))

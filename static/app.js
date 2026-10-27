@@ -219,11 +219,12 @@ async function loadMySubmissionsView(force = false) {
     const res = await fetch(`/api/records?researched_by=${encodeURIComponent(researcherName)}`);
     if (!res.ok) throw new Error("Failed to load submissions");
     _mySubmissionsData = await res.json();
+    _mySubmissionsData.sort((a, b) => (b.id || 0) - (a.id || 0));
 
     // Calculate status counts
     const countAll = _mySubmissionsData.length;
     const countPending = _mySubmissionsData.filter(r => r.status === "PENDING_REVALIDATION").length;
-    const countApproved = _mySubmissionsData.filter(r => ["APPROVED", "PIPELINE_PROCESSING", "VALIDATION_READY", "COMPLETED"].includes(r.status)).length;
+    const countApproved = _mySubmissionsData.filter(r => ["APPROVED", "PIPELINE_PROCESSING", "PIPELINE_FAILED", "VALIDATION_READY", "COMPLETED"].includes(r.status)).length;
     const countRejected = _mySubmissionsData.filter(r => r.status && r.status.includes("REJECTED")).length;
 
     const cAll = document.getElementById("my-count-all");
@@ -271,7 +272,7 @@ function renderMySubmissionsTable() {
 
   let filtered = _mySubmissionsData.filter(r => {
     if (_mySubmissionsFilter === "PENDING_REVALIDATION" && r.status !== "PENDING_REVALIDATION") return false;
-    if (_mySubmissionsFilter === "APPROVED" && !["APPROVED", "PIPELINE_PROCESSING", "VALIDATION_READY", "COMPLETED"].includes(r.status)) return false;
+    if (_mySubmissionsFilter === "APPROVED" && !["APPROVED", "PIPELINE_PROCESSING", "PIPELINE_FAILED", "VALIDATION_READY", "COMPLETED"].includes(r.status)) return false;
     if (_mySubmissionsFilter === "REJECTED" && (!r.status || !r.status.includes("REJECTED"))) return false;
 
     if (searchTerm) {
@@ -1576,15 +1577,8 @@ async function loadApprovedDataset() {
     const res = await fetch(url);
     const records = await res.json();
 
-    // Sort by research_date DESC (current date at top), then id DESC
-    records.sort((a, b) => {
-      const dateA = a.research_date || "";
-      const dateB = b.research_date || "";
-      if (dateA !== dateB) {
-        return dateB.localeCompare(dateA);
-      }
-      return (b.id || 0) - (a.id || 0);
-    });
+    // Sort by most recent id DESC
+    records.sort((a, b) => (b.id || 0) - (a.id || 0));
 
     state.approvedRecords = records;
 
@@ -1614,44 +1608,78 @@ function formatDateSlash(dateStr) {
 }
 
     if (records.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="17" class="text-center text-muted" style="padding: 2.5rem;">No approved records found matching your filters.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="24" class="text-center text-muted" style="padding: 2.5rem;">No approved records found matching your filters.</td></tr>`;
       return;
     }
 
     tbody.innerHTML = records.map(r => {
       const dateSlash = formatDateSlash(r.research_date);
-      const spkChannel = r.speaker_channel_name || r.channel_name || r.speakers_id;
+      const completionSlash = formatDateSlash(r.completion_date) || '—';
+      const spkChannel = r.speaker_channel_name || r.channel_name || r.speakers_id || '—';
       const assignedTo = r.assigned_to || r.revalidated_by || r.researched_by || '—';
       const pipelineBtn = _buildPipelineBtnHtml(r);
 
       return `
         <tr>
+          <!-- 1. Date -->
           <td class="font-mono text-sm font-bold text-emerald" title="Original: ${escapeHtml(r.research_date)}">${escapeHtml(dateSlash)}</td>
-          <td><span class="tag-pill">${escapeHtml(r.source)}</span></td>
+          <!-- 2. Completion_date -->
+          <td class="font-mono text-sm" title="Original: ${escapeHtml(r.completion_date || '')}">${escapeHtml(completionSlash)}</td>
+          <!-- 3. Source -->
+          <td><span class="tag-pill">${escapeHtml(r.source || '—')}</span></td>
+          <!-- 4. Audio_Link -->
           <td>
             <a href="${escapeHtml(r.audio_link)}" target="_blank" rel="noopener noreferrer" class="table-link" title="${escapeHtml(r.audio_link)}">
               Link <i class="fa-solid fa-arrow-up-right-from-square"></i>
             </a>
           </td>
+          <!-- 5. Text_Link -->
           <td><span class="badge badge-indigo">${escapeHtml(r.text_link || 'ASR')}</span></td>
+          <!-- 6. Description -->
           <td style="max-width: 240px;">
             <div style="font-family: var(--font-mono); font-size: 0.825rem; white-space: pre-wrap;">${escapeHtml(r.description)}</div>
           </td>
+          <!-- 7. Dataset Name -->
           <td><span class="font-mono text-xs">${escapeHtml(r.dataset_name || '—')}</span></td>
-          <td>${escapeHtml(r.gender)}</td>
-          <td class="font-mono text-sm">${escapeHtml(r.before_processing_duration)}</td>
-          <td class="font-mono font-bold">${escapeHtml(r.speakers_id)}</td>
-          <td>${escapeHtml(spkChannel)}</td>
-          <td>${escapeHtml(r.accent || 'Normal Accent')}</td>
-          <td><span class="badge badge-indigo">${escapeHtml(r.licensing || 'CC')}</span></td>
-          <td>${escapeHtml(r.researched_by)}</td>
+          <!-- 8. Gender -->
+          <td>${escapeHtml(r.gender || '—')}</td>
+          <!-- 9. Before_Processing_Duration -->
+          <td class="font-mono text-sm">${escapeHtml(r.before_processing_duration || '00:00:00')}</td>
+          <!-- 10. After_Processing_Duration -->
+          <td class="font-mono text-sm">${escapeHtml(r.after_processing_duration || '0:00:00')}</td>
+          <!-- 11. Total_files -->
+          <td class="font-mono text-sm text-center">${escapeHtml(r.total_files || '—')}</td>
+          <!-- 12. Researched_By -->
+          <td>${escapeHtml(r.researched_by || '—')}</td>
+          <!-- 13. Assigned_to -->
           <td class="text-emerald font-bold">${escapeHtml(assignedTo)}</td>
+          <!-- 14. Status -->
+          <td><span class="badge badge-emerald font-bold">${escapeHtml(r.status || 'APPROVED')}</span></td>
+          <!-- 15. Data_type (Augmentation_Status) -->
+          <td><span class="tag-pill">${escapeHtml(r.data_type_augmentation_status || 'Original')}</span></td>
+          <!-- 16. Data_available -->
+          <td><span class="tag-pill">${escapeHtml(r.data_available || 'Lightining AV/HF')}</span></td>
+          <!-- 17. Speakers_ID -->
+          <td class="font-mono font-bold">${escapeHtml(r.speakers_id || '—')}</td>
+          <!-- 18. Speaker/Channel_Name -->
+          <td>${escapeHtml(spkChannel)}</td>
+          <!-- 19. Accent -->
+          <td>${escapeHtml(r.accent || 'Normal Accent')}</td>
+          <!-- 20. Licensing -->
+          <td><span class="badge badge-indigo">${escapeHtml(r.licensing || 'CC')}</span></td>
+          <!-- 21. Handover -->
           <td><span class="badge ${r.handover === 'Yes' ? 'badge-emerald' : 'badge-slate'}">${escapeHtml(r.handover || 'No')}</span></td>
+          <!-- 22. Remark -->
+          <td style="max-width: 200px;">
+            <div style="font-size: 0.825rem; white-space: pre-wrap;">${escapeHtml(r.remark || r.rejection_reason || '—')}</div>
+          </td>
+          <!-- Actions: Audit -->
           <td>
             <button class="btn btn-outline btn-sm" onclick="viewAuditTrail(${r.id})" title="View Lifecycle History">
               <i class="fa-solid fa-clock-rotate-left"></i>
             </button>
           </td>
+          <!-- Actions: Pipeline -->
           <td>${pipelineBtn}</td>
         </tr>
       `;
@@ -1674,6 +1702,30 @@ function initCsvPreviewModal() {
   const modal = document.getElementById("modal-csv-preview");
   const closeBtn = document.getElementById("modal-csv-close");
   const closeBtn2 = document.getElementById("btn-close-csv-preview");
+  const btnViewTable = document.getElementById("btn-preview-view-table");
+  const btnViewRaw = document.getElementById("btn-preview-view-raw");
+  const tableWrapper = document.getElementById("csv-preview-table-wrapper");
+  const rawBox = document.getElementById("csv-preview-content");
+  const thead = document.getElementById("csv-preview-thead");
+  const tbody = document.getElementById("csv-preview-tbody");
+
+  btnViewTable?.addEventListener("click", () => {
+    btnViewTable.classList.remove("btn-secondary");
+    btnViewTable.classList.add("btn-primary");
+    btnViewRaw?.classList.remove("btn-primary");
+    btnViewRaw?.classList.add("btn-secondary");
+    tableWrapper?.classList.remove("hidden");
+    rawBox?.classList.add("hidden");
+  });
+
+  btnViewRaw?.addEventListener("click", () => {
+    btnViewRaw.classList.remove("btn-secondary");
+    btnViewRaw.classList.add("btn-primary");
+    btnViewTable?.classList.remove("btn-primary");
+    btnViewTable?.classList.add("btn-secondary");
+    tableWrapper?.classList.add("hidden");
+    rawBox?.classList.remove("hidden");
+  });
 
   previewBtn?.addEventListener("click", async () => {
     try {
@@ -1681,9 +1733,33 @@ function initCsvPreviewModal() {
       const data = await res.json();
 
       document.getElementById("preview-record-count").textContent = `${data.count} Approved Records`;
-      document.getElementById("csv-preview-content").textContent = data.csv_text;
+      if (rawBox) rawBox.textContent = data.csv_text;
+
+      const columns = data.columns || [
+        "Date", "Completion_date", "Source", "Audio_Link", "Text_Link", "Description",
+        "Dataset Name", "Gender", "Before_Processing_Duration", "After_Processing_Duration",
+        "Total_files", "Researched_By", "Assigned_to", "Status", "Data_type (Augmentation_Status)",
+        "Data_available", "Speakers_ID", "Speaker/Channel_Name", "Accent", "Licensing", "Handover", "Remark"
+      ];
+
+      if (thead) {
+        thead.innerHTML = `<tr>${columns.map(c => `<th style="white-space: nowrap; padding: 0.6rem 0.85rem; background: #f8fafc; border-bottom: 2px solid #cbd5e1; position: sticky; top: 0; z-index: 5;">${escapeHtml(c)}</th>`).join('')}</tr>`;
+      }
+
+      if (tbody) {
+        if (!data.rows || data.rows.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="${columns.length}" style="text-align: center; padding: 2rem; color: #64748b;">No approved records in database.</td></tr>`;
+        } else {
+          tbody.innerHTML = data.rows.map(r => `
+            <tr>${columns.map(c => `<td style="white-space: nowrap; padding: 0.45rem 0.85rem; border-bottom: 1px solid #f1f5f9; font-family: ${c.includes('Date') || c.includes('Duration') || c.includes('ID') ? 'var(--font-mono)' : 'inherit'};" title="${escapeHtml(r[c] || '')}">${escapeHtml(r[c] || '—')}</td>`).join('')}</tr>
+          `).join('');
+        }
+      }
+
+      btnViewTable?.click();
       modal.classList.remove("hidden");
     } catch (err) {
+      console.error("Preview CSV error", err);
       showToast("Failed to generate CSV preview", "error");
     }
   });
@@ -1835,13 +1911,8 @@ async function loadAllRecords(statusFilter = "ALL") {
     const res = await fetch(`/api/records?status=${encodeURIComponent(statusFilter)}`);
     const records = await res.json();
 
-    // Sort by research_date DESC, then id DESC
-    records.sort((a, b) => {
-      const dateA = a.research_date || "";
-      const dateB = b.research_date || "";
-      if (dateA !== dateB) return dateB.localeCompare(dateA);
-      return (b.id || 0) - (a.id || 0);
-    });
+    // Sort by most recent id DESC
+    records.sort((a, b) => (b.id || 0) - (a.id || 0));
 
     if (records.length === 0) {
       tbody.innerHTML = `<tr><td colspan="10" class="text-center text-muted" style="padding: 2.5rem;">No records found.</td></tr>`;
