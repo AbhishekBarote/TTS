@@ -105,8 +105,7 @@ function initIdentity() {
     }
   }
 
-  // Pre-fetch next speaker ID
-  fetchNextSpeakerId();
+
 }
 
 async function fetchNextSpeakerId() {
@@ -585,17 +584,22 @@ function initDashboardForm() {
   spkInput?.addEventListener("input", triggerLiveCapCheck);
   durationInput?.addEventListener("input", triggerLiveCapCheck);
 
-  // Suggest next speaker button
-  autoSpkBtn?.addEventListener("click", async () => {
-    try {
-      const res = await fetch("/api/next-speaker-id");
-      const data = await res.json();
-      document.getElementById("input-speaker-id").value = data.next_speaker_id;
-      showToast(`Assigned Speaker ID: ${data.next_speaker_id}`, "info");
-      checkSpeakerCapLive(data.next_speaker_id, durationInput?.value.trim());
-    } catch (err) {
-      showToast("Could not assign speaker ID", "error");
+  // Accent dropdown + custom manual input handling
+  const selAccent = document.getElementById("select-accent");
+  const customAccent = document.getElementById("input-accent-custom");
+  const hiddenAccent = document.getElementById("input-accent");
+  selAccent?.addEventListener("change", () => {
+    if (selAccent.value === "Other") {
+      customAccent?.classList.remove("hidden");
+      customAccent?.focus();
+      if (hiddenAccent) hiddenAccent.value = customAccent?.value.trim() || "Other";
+    } else {
+      customAccent?.classList.add("hidden");
+      if (hiddenAccent) hiddenAccent.value = selAccent.value;
     }
+  });
+  customAccent?.addEventListener("input", () => {
+    if (hiddenAccent) hiddenAccent.value = customAccent.value.trim() || "Other";
   });
 
   // Refresh speaker ledgers
@@ -611,11 +615,16 @@ function initDashboardForm() {
   cancelBtn?.addEventListener("click", () => {
     form.reset();
     document.getElementById("input-research-date").value = new Date().toISOString().split("T")[0];
-    document.getElementById("input-accent").value = "Indian English";
+    if (document.getElementById("select-accent")) document.getElementById("select-accent").value = "Normal Accent";
+    if (document.getElementById("input-accent-custom")) {
+      document.getElementById("input-accent-custom").value = "";
+      document.getElementById("input-accent-custom").classList.add("hidden");
+    }
+    if (document.getElementById("input-accent")) document.getElementById("input-accent").value = "Normal Accent";
+    if (document.getElementById("input-speaker-id")) document.getElementById("input-speaker-id").value = "";
     syncSearchInputs("", null);
     resetDuplicateUI();
     updateStepper(1);
-    fetchNextSpeakerId();
   });
 
   // Form Submission
@@ -902,15 +911,33 @@ async function performDuplicateCheck(url) {
     const canonical = data.canonical_url || meta.canonical_url || url;
     const hash = meta.content_hash || "";
 
-    // 1. Auto-fill metadata into form inputs if appropriate
-    if (meta.formatted_description && (!descInput.value.trim() || descInput.value.trim().length < 10)) {
-      descInput.value = meta.formatted_description;
+    // 1. Always auto-fill metadata into form inputs to match the current link
+    const isYouTube = url.toLowerCase().includes("youtube.com") || url.toLowerCase().includes("youtu.be");
+    const detectedSource = isYouTube ? "YouTube" : "Website";
+    if (sourceInput) {
+      sourceInput.value = detectedSource;
     }
-    if (meta.duration && (!durInput.value.trim() || durInput.value === "18:35")) {
-      durInput.value = meta.duration;
+
+    const newDesc = meta.formatted_description || (meta.title ? (meta.channel ? `${meta.title}\nchannel : ${meta.channel}` : meta.title) : meta.description || "");
+    if (descInput) {
+      descInput.value = newDesc;
     }
-    if (platform && sourceInput && (!sourceInput.value.trim() || sourceInput.value === "YouTube" || sourceInput.value === "Web")) {
-      sourceInput.value = platform;
+
+    if (durInput) {
+      durInput.value = (meta.duration && meta.duration !== "00:00:00") ? meta.duration : "";
+    }
+
+    // Auto-fill speaker ID if found in API metadata / channel clues, otherwise leave field blank
+    if (spkInput) {
+      if (meta.speaker_id && meta.speaker_id.trim()) {
+        spkInput.value = meta.speaker_id.trim();
+        const durVal = durInput?.value.trim() || meta.duration || "00:00:00";
+        checkSpeakerCapLive(meta.speaker_id.trim(), durVal);
+      } else {
+        spkInput.value = "";
+        const meter = document.getElementById("speaker-duration-meter");
+        if (meter) meter.classList.add("hidden");
+      }
     }
 
     // Auto-detect and populate Licensing (Requirements 1, 2, 3, 5, 6, 7)
@@ -1111,9 +1138,24 @@ async function submitNewRecord() {
   const source = document.getElementById("input-source").value.trim();
   const duration = document.getElementById("input-duration").value.trim();
   const description = document.getElementById("input-description").value.trim();
-  const accent = document.getElementById("input-accent").value.trim();
-  const licensing = document.getElementById("select-licensing").value;
-  const speakerId = document.getElementById("input-speaker-id").value.trim();
+  const selAccent = document.getElementById("select-accent");
+  let accent = selAccent?.value || "";
+  if (accent === "Other") {
+    const custom = document.getElementById("input-accent-custom")?.value.trim();
+    if (!custom) {
+      showToast("Please specify a custom accent.", "error");
+      document.getElementById("input-accent-custom")?.focus();
+      return;
+    }
+    accent = custom;
+  }
+  if (!accent) {
+    showToast("Accent is required.", "error");
+    selAccent?.focus();
+    return;
+  }
+  const licensing = document.getElementById("select-licensing")?.value || "Unknown / Not Specified";
+  const speakerId = (document.getElementById("input-speaker-id")?.value || "").trim();
   const researchedBy = localStorage.getItem("researched_by") || "Researcher A";
 
   // Form Validation
@@ -1137,14 +1179,9 @@ async function submitNewRecord() {
     document.getElementById("input-duration").focus();
     return;
   }
-  if (!speakerId) {
-    showToast("Speakers_ID is required.", "error");
-    document.getElementById("input-speaker-id").focus();
-    return;
-  }
 
-  // Pre-submission Speaker Duration Cap Verification (Section 9)
-  if (state.speakerDurationCheck && state.speakerDurationCheck.is_valid === false) {
+  // Pre-submission Speaker Duration Cap Verification (only if Speaker ID is provided)
+  if (speakerId && state.speakerDurationCheck && state.speakerDurationCheck.is_valid === false) {
     showToast(`Cannot submit: ${state.speakerDurationCheck.message}`, "error");
     return;
   }
@@ -1217,9 +1254,14 @@ async function submitNewRecord() {
     // Reset Form
     document.getElementById("submission-form").reset();
     document.getElementById("input-research-date").value = new Date().toISOString().split("T")[0];
-    document.getElementById("input-accent").value = "Indian English";
+    if (document.getElementById("select-accent")) document.getElementById("select-accent").value = "Normal Accent";
+    if (document.getElementById("input-accent-custom")) {
+      document.getElementById("input-accent-custom").value = "";
+      document.getElementById("input-accent-custom").classList.add("hidden");
+    }
+    if (document.getElementById("input-accent")) document.getElementById("input-accent").value = "Normal Accent";
+    if (document.getElementById("input-speaker-id")) document.getElementById("input-speaker-id").value = "";
     resetDuplicateUI();
-    fetchNextSpeakerId();
 
     // Refresh Dashboard metrics, speaker ledgers & tables
     refreshAllData();

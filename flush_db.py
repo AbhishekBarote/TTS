@@ -6,7 +6,6 @@ def flush_database():
         "pipeline_jobs",
         "records",
         "audit_logs",
-        "decision_audit",
         "speaker_duration_ledger",
         "speaker_ledger",
         "web_verifications",

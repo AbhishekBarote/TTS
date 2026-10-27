@@ -42,11 +42,11 @@ class RecordCreateRequest(BaseModel):
     description: str
     gender: str
     before_processing_duration: str
-    accent: str = "Indian English"
-    licensing: str
+    accent: Optional[str] = "Normal Accent"
+    licensing: Optional[str] = "Unknown / Not Specified"
     licensing_evidence: Optional[str] = ""
     sanskrit_evidence: Optional[str] = ""
-    speakers_id: str
+    speakers_id: Optional[str] = ""
     researched_by: str
     action: str = Field(..., description="'SEND_FOR_REVIEW', 'REJECT', or 'SAVE_DRAFT'")
     rejection_reason: Optional[str] = None

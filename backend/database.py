@@ -231,11 +231,11 @@ def init_db():
         gender TEXT NOT NULL,
         before_processing_duration TEXT NOT NULL,
         duration_seconds INTEGER DEFAULT 0,
-        accent TEXT NOT NULL DEFAULT 'Indian English',
-        licensing TEXT NOT NULL,
+        accent TEXT DEFAULT 'Normal Accent',
+        licensing TEXT DEFAULT 'Unknown / Not Specified',
         licensing_evidence TEXT,
-        sanskrit_evidence TEXT NOT NULL,
-        speakers_id TEXT NOT NULL,
+        sanskrit_evidence TEXT DEFAULT '',
+        speakers_id TEXT DEFAULT '',
         researched_by TEXT NOT NULL,
         revalidated_by TEXT,
         status TEXT NOT NULL DEFAULT 'PENDING_REVALIDATION',
@@ -291,23 +291,7 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_speaker ON speaker_duration_ledger (speaker_id);")
 
-    # 4. Decision Audit table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS decision_audit (
-        id SERIAL PRIMARY KEY,
-        candidate_video_id TEXT,
-        status TEXT NOT NULL,
-        matched_video_id TEXT,
-        reason TEXT,
-        evidence_fields TEXT,
-        pre_filter_scores TEXT,
-        endpoint_version TEXT,
-        request_latency_ms REAL,
-        decision_timestamp TEXT NOT NULL,
-        error_state TEXT
-    );
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_candidate ON decision_audit (candidate_video_id);")
+
 
     # 5. Audit Log table
     cursor.execute("""
@@ -652,18 +636,7 @@ def upsert_web_verification(data: Dict[str, Any]) -> Dict[str, Any]:
         record_id = cursor.lastrowid
         action = "STORED_INITIAL"
 
-    # Also record in decision_audit
-    cursor.execute("""
-        INSERT INTO decision_audit (
-            candidate_video_id, status, matched_video_id, reason,
-            evidence_fields, pre_filter_scores, endpoint_version,
-            request_latency_ms, decision_timestamp, error_state
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        canonical_url, status, matched_page_id, decision_reason,
-        evidence_fields, str(prefilter_score), data.get("endpoint_version", "web-verifier"),
-        latency_ms, now_iso, None
-    ))
+
 
     conn.commit()
     conn.close()
@@ -785,7 +758,6 @@ def flush_database() -> Dict[str, int]:
         "pipeline_jobs",
         "records",
         "audit_logs",
-        "decision_audit",
         "speaker_duration_ledger"
     ]
     conn = get_connection()

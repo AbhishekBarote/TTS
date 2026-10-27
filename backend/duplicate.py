@@ -93,11 +93,7 @@ def extract_platform_and_item_id(url: str) -> Tuple[str, Optional[str]]:
         return ("SoundCloud", None)
 
     # Generic or others
-    platform = "Web"
-    if hostname:
-        clean_host = hostname.replace('www.', '')
-        platform = clean_host.split('.')[0].capitalize()
-    return (platform, None)
+    return ("Website", None)
 
 
 def canonicalize_url(url: str) -> str:

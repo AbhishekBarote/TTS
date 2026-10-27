@@ -175,8 +175,7 @@ def validate_and_normalize_url(url: str) -> Tuple[bool, str, str, Optional[str],
             platform_item_id = f"{parts[0]}/{parts[1]}"
 
     else:
-        domain_parts = clean_host.split('.')
-        platform = domain_parts[0].capitalize() if domain_parts else "Web"
+        platform = "Website"
 
     canonical_url = urlunparse((scheme, clean_host, path, '', clean_query, ''))
     return (True, canonical_url, platform, platform_item_id, None)
@@ -191,6 +190,107 @@ def generate_content_hash(text: str) -> str:
     cleaned = unicodedata.normalize("NFKC", (text or "")).strip().lower()
     cleaned = re.sub(r'\s+', ' ', cleaned)
     return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
+
+
+HONORIFICS_LIST = [
+    'dr.', 'dr', 'prof.', 'prof', 'professor', 'swami', 'sri', 'shri', 'smt.', 'smt',
+    'acharya', 'sadguru', 'sadhguru', 'pandit', 'pt.', 'pt', 'ustad', 'sister', 'father',
+    'rev.', 'guru', 'gurudev', 'sant', 'baba', 'maharaj'
+]
+
+
+def clean_speaker_name(name: str) -> Optional[str]:
+    """Cleans up and validates an extracted speaker name string with proper casing."""
+    if not name:
+        return None
+    name = re.sub(r'^(?:Speaker|Spoken by|Lecturer|Presented by|By|Talk by|Speech by)\s*[:\-–—]?\s*', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s+(?:Official|Channel|Hindi|English|Podcast|Videos|Shorts|Clips|Talks|Foundation|Ashram|Trust)$', '', name, flags=re.IGNORECASE)
+    name = name.split('\n')[0].split('|')[0].split(' - ')[0].split(' : ')[0].strip()
+    name = re.sub(r'[^\w\s\.\'\-]', '', name).strip()
+    name = re.split(r'\s+on\s+', name, flags=re.IGNORECASE)[0].strip()
+    words = name.split()
+    if len(name) < 3 or len(name) > 50 or len(words) > 5:
+        return None
+    formatted_words = []
+    for w in words:
+        if w.lower() in ('dr.', 'dr', 'prof.', 'prof', 'pt.', 'pt', 'smt.', 'smt'):
+            formatted_words.append(w.capitalize() + ('.' if not w.endswith('.') else ''))
+        elif w.islower():
+            formatted_words.append(w.capitalize())
+        else:
+            formatted_words.append(w)
+    return ' '.join(formatted_words)
+
+
+def extract_speaker_from_metadata(
+    title: str,
+    description: str,
+    channel: Optional[str] = None,
+    comments: Optional[List[str]] = None
+) -> Optional[str]:
+    """
+    Extracts speaker name by checking title segments, full description, top comments, and channel cues.
+    Returns clean speaker name if detected, else None.
+    """
+    # 1. Check Title Segments (delimited by |, -, --, /, etc., e.g., 'Title | Topic | swami sarvapriyananda')
+    segments = [s.strip() for s in re.split(r'[|\-–—/•]', title or '') if s.strip()]
+    for seg in segments:
+        m_pref = re.match(r'^(?:speaker|guest speaker|spoken by|presented by|by|talk by|lecture by|discourse by)\s*[:\-–—]?\s*(.+)$', seg, re.I)
+        cand = m_pref.group(1).strip() if m_pref else seg
+        cand_clean = re.split(r'\s+on\s+', cand, flags=re.I)[0].strip()
+        words = cand_clean.split()
+        if words:
+            first_w = words[0].lower().rstrip('.')
+            if first_w in [h.rstrip('.') for h in HONORIFICS_LIST]:
+                if 1 <= len(words) <= 5:
+                    c = clean_speaker_name(cand_clean)
+                    if c:
+                        return c
+            elif m_pref and len(words) <= 4:
+                c = clean_speaker_name(cand_clean)
+                if c:
+                    return c
+
+    # 2. Check Description first (richest source of speaker info in video uploads)
+    desc_patterns = [
+        r'(?:speaker|guest speaker|keynote speaker|eminent speaker|distinguished speaker|resource person|chief guest|spoken by|presented by|discourse by|lecture by|talk by|speech by|recited by|chanted by|orator|narrated by|interview with|conversation with|in conversation with)\s*[:\-–—|]\s*([^\n\r|,;()]+)',
+        r'(?:lecture|talk|speech|discourse|satsang|upanyasam|address|presentation)\s+(?:by|with)\s+([A-Za-z\.\s]{3,40})',
+    ]
+    for p in desc_patterns:
+        m = re.search(p, description or '', re.I)
+        if m:
+            c = clean_speaker_name(m.group(1))
+            if c:
+                return c
+
+    # 3. Check Title Regex Patterns
+    title_patterns = [
+        r'(?:speaker|guest speaker|spoken by|presented by|discourse by|lecture by|talk by|speech by)\s*[:\-–—|]?\s*([A-Za-z\.\'\s]{3,35})(?=\s+on\s+|$|[|\-–—/•:;,#\(\)])',
+        r'\b(?:dr\.?|prof\.?|professor|swami|sri|shri|smt\.?|acharya|sadguru|sadhguru|pandit|pt\.?|ustad|sister|father|rev\.?|guru|gurudev|sant|baba|maharaj)\s+([A-Za-z\.\']+(?:\s+[A-Za-z\.\']+){0,3})(?=\s+on\s+|$|[|\-–—/•:;,#\(\)])',
+    ]
+    for p in title_patterns:
+        m = re.search(p, title or '', re.I)
+        if m:
+            val = m.group(0) if 'dr' in p else (m.group(1) if m.groups() else m.group(0))
+            c = clean_speaker_name(val)
+            if c:
+                return c
+
+    # 4. Check Top Comments
+    for comm in (comments or []):
+        m = re.search(r'(?:speaker(?:\s*name|\s*is)?|speaking is|lecturer is|speech by|talk by|discourse by|lecture by)\s*(?:is|:|-)?\s*([A-Za-z\.\s]{3,35})', comm, re.I)
+        if m:
+            c = clean_speaker_name(m.group(1))
+            if c:
+                return c
+
+    # 5. Check Channel Name ONLY if it explicitly identifies a person (has honorific prefix)
+    if channel:
+        chan_clean = re.sub(r'\s+(?:Official|Channel|Hindi|English|Podcast|Videos|Shorts|Clips|Talks|Foundation|Ashram|Trust)$', '', channel, flags=re.I).strip()
+        if re.search(r'^(?:Dr\.|Prof\.|Swami|Sri|Shri|Smt\.|Acharya|Sadguru|Sadhguru|Pandit|Pt\.|Sister|Father|Rev\.)\s+', chan_clean, re.I):
+            return clean_speaker_name(chan_clean)
+
+    return None
 
 
 def fetch_essential_content(
@@ -219,6 +319,8 @@ def fetch_essential_content(
         "formatted_description": "",
         "main_text": "",
         "content_hash": "",
+        "speaker_id": "",
+        "comments": [],
         "fetch_error": None,
         "status_code": 200,
         "redirect_occurred": False
@@ -243,7 +345,7 @@ def fetch_essential_content(
                         result["title"] = snip.get("title", "").strip()
                         result["author"] = snip.get("channelTitle", "").strip()
                         result["channel"] = result["author"]
-                        result["description"] = snip.get("description", "").strip()[:500]
+                        result["description"] = snip.get("description", "").strip()[:8000]
                         # Duration
                         iso = cd.get("duration", "")
                         h_m = re.search(r'(\d+)H', iso)
@@ -253,6 +355,46 @@ def fetch_essential_content(
                         m = int(m_m.group(1)) if m_m else 0
                         s = int(s_m.group(1)) if s_m else 0
                         result["duration"] = f"{h:02d}:{m:02d}:{s:02d}"
+
+                        # Top comments for speaker and licensing verification
+                        try:
+                            c_url = f"https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId={platform_item_id}&maxResults=10&order=relevance&key={yt_key}"
+                            c_res = _session.get(c_url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT, verify=True)
+                            if c_res.status_code == 200:
+                                for c_it in c_res.json().get("items", []):
+                                    top_c = c_it.get("snippet", {}).get("topLevelComment", {}).get("snippet", {})
+                                    txt = top_c.get("textDisplay") or top_c.get("textOriginal") or ""
+                                    if txt:
+                                        result["comments"].append(txt)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        # Duration fallback from watch page if API returned empty/zero duration
+        if result.get("duration") in ("", "00:00:00", None) and platform_item_id:
+            try:
+                watch_url = f"https://www.youtube.com/watch?v={platform_item_id}"
+                r_watch = _session.get(watch_url, headers=DEFAULT_HEADERS, timeout=3.5, verify=True)
+                if r_watch.status_code == 200:
+                    m_sec = re.search(r'"lengthSeconds":"(\d+)"', r_watch.text)
+                    if m_sec:
+                        total_s = int(m_sec.group(1))
+                        wh = total_s // 3600
+                        wm = (total_s % 3600) // 60
+                        ws = total_s % 60
+                        result["duration"] = f"{wh:02d}:{wm:02d}:{ws:02d}"
+                    else:
+                        m_iso = re.search(r'itemprop="duration" content="PT([^"]+)"', r_watch.text)
+                        if m_iso:
+                            iso_str = m_iso.group(1)
+                            h_match = re.search(r'(\d+)H', iso_str)
+                            m_match = re.search(r'(\d+)M', iso_str)
+                            s_match = re.search(r'(\d+)S', iso_str)
+                            wh = int(h_match.group(1)) if h_match else 0
+                            wm = int(m_match.group(1)) if m_match else 0
+                            ws = int(s_match.group(1)) if s_match else 0
+                            result["duration"] = f"{wh:02d}:{wm:02d}:{ws:02d}"
             except Exception:
                 pass
 
@@ -508,6 +650,23 @@ def execute_fast_verification(
     # Step 4: Fast Exact Match Check Against Indexed DB
     conn = get_connection()
     cursor = conn.cursor()
+
+    # Detect speaker_id from metadata (title, description, top comments, channel clues) or historical channel mappings
+    detected_speaker = extract_speaker_from_metadata(title, fetched.get("description", ""), channel=author, comments=fetched.get("comments", []))
+    if not detected_speaker and author:
+        try:
+            cursor.execute("""
+                SELECT speakers_id FROM records
+                WHERE (LOWER(channel_name) = ? OR LOWER(speaker_channel_name) = ?)
+                  AND speakers_id IS NOT NULL AND TRIM(speakers_id) != ''
+                ORDER BY id DESC LIMIT 1
+            """, (author.lower(), author.lower()))
+            r_spk = cursor.fetchone()
+            if r_spk and r_spk["speakers_id"]:
+                detected_speaker = r_spk["speakers_id"].strip()
+        except Exception:
+            pass
+    fetched["speaker_id"] = detected_speaker or ""
 
     exact_record = None
     exact_reason = None

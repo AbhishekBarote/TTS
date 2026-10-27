@@ -481,17 +481,22 @@
                     <!-- Right Stack: Accent, Licensing, Speaker ID -->
                     <div class="form-field-stack">
                       <div class="form-field">
-                        <label for="input-accent" class="intake-label required">Accent</label>
-                        <select id="input-accent" class="hub-input" required>
-                          <option value="Indian English">Indian English</option>
-                          <option value="Other">Other</option>
+                        <label for="select-accent" class="intake-label required">Accent</label>
+                        <select id="select-accent" class="hub-input" required>
+                          <option value="Normal Accent" selected>Normal Accent</option>
+                          <option value="South Indian Accent">South Indian Accent</option>
+                          <option value="Synthetic">Synthetic</option>
+                          <option value="Foreign Accent">Foreign Accent</option>
+                          <option value="Other">Other (Manual Entry)</option>
                         </select>
+                        <input type="text" id="input-accent-custom" class="hub-input mt-1.5 hidden" placeholder="Enter custom accent...">
+                        <input type="hidden" id="input-accent" value="Normal Accent">
                       </div>
 
                       <div class="form-field mt-2">
-                        <label for="select-licensing" class="intake-label required">Licensing</label>
-                        <select id="select-licensing" class="hub-input" required>
-                          <option value="Unknown / Not Specified">Unknown / Not Specified (Manual Selection)</option>
+                        <label for="select-licensing" class="intake-label">Licensing</label>
+                        <select id="select-licensing" class="hub-input">
+                          <option value="Unknown / Not Specified">Unknown / Not Specified</option>
                           <option value="Standard YouTube License">Standard YouTube License</option>
                           <option value="CC BY">CC BY</option>
                           <option value="CC BY-SA">CC BY-SA</option>
@@ -531,12 +536,8 @@
                       </div>
 
                       <div class="form-field mt-2">
-                        <div class="label-row-between">
-                          <label for="input-speaker-id" class="intake-label required">Speakers ID</label>
-                          <button type="button" class="btn-link-action" id="btn-auto-spk">Suggest Next</button>
-                        </div>
-                        <input type="text" id="input-speaker-id" class="hub-input font-mono" placeholder="SPK_001"
-                          required>
+                        <label for="input-speaker-id" class="intake-label">Speakers ID</label>
+                        <input type="text" id="input-speaker-id" class="hub-input font-mono" placeholder="SPK_001 (optional)">
 
                         <!-- Live 3.5h Cap Meter (Section 9) -->
                         <div id="speaker-duration-meter" class="speaker-duration-meter mt-2 hidden">
@@ -623,9 +624,6 @@
                 <div class="mt-4 pt-3" style="border-top:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;">
                   <button type="button" class="btn btn-outline btn-sm" onclick="switchTab('my-submissions-view')">
                     <i class="fa-regular fa-folder-open"></i> My Submissions
-                  </button>
-                  <button type="button" class="btn btn-secondary btn-sm" onclick="fetchNextSpeakerId()">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> Next Speaker
                   </button>
                 </div>
               </div>
@@ -1081,7 +1079,13 @@
                 </div>
                 <div>
                   <label for="modal-edit-accent" class="text-xs text-muted uppercase font-bold d-block mb-1">Accent</label>
-                  <input type="text" id="modal-edit-accent" class="hub-input text-xs" placeholder="e.g. Indian English">
+                  <input type="text" id="modal-edit-accent" class="hub-input text-xs" list="datalist-accents" placeholder="e.g. Normal Accent">
+                  <datalist id="datalist-accents">
+                    <option value="Normal Accent"></option>
+                    <option value="South Indian Accent"></option>
+                    <option value="Synthetic"></option>
+                    <option value="Foreign Accent"></option>
+                  </datalist>
                 </div>
               </div>
 

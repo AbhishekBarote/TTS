@@ -200,34 +200,29 @@ def check_duplicate_api(req: DuplicateCheckRequest):
 
     meta["licensing_info"] = lic_info
 
+    if not meta.get("speaker_id"):
+        from backend.fast_verifier import extract_speaker_from_metadata
+        extra_comments = list(meta.get("comments") or [])
+        if isinstance(lic_info, dict):
+            for k in ("evidence", "screening_guidance"):
+                val = lic_info.get(k)
+                if val and isinstance(val, str):
+                    extra_comments.append(val)
+        extra_spk = extract_speaker_from_metadata(
+            title=meta.get("title") or req.title or "",
+            description=meta.get("description") or req.description or "",
+            channel=meta.get("channel") or meta.get("author") or "",
+            comments=extra_comments
+        )
+        if extra_spk:
+            meta["speaker_id"] = extra_spk
+
     raw_duration = req.before_processing_duration or meta.get("duration") or "00:00:00"
     formatted_dur = format_duration(raw_duration)
     cand_dur_seconds = duration_to_seconds(formatted_dur)
 
     conn = get_connection()
     spk_check = validate_speaker_duration_cap(conn, req.speakers_id, cand_dur_seconds)
-
-    # Audit the decision
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO decision_audit (
-            candidate_video_id, status, matched_video_id, reason,
-            evidence_fields, pre_filter_scores, endpoint_version,
-            request_latency_ms, decision_timestamp, error_state
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        res.get("platform_item_id") or res.get("canonical_url"),
-        res.get("status"),
-        res.get("matched_video_id"),
-        res.get("reason"),
-        json.dumps(res.get("evidence_fields", [])),
-        "0.0",
-        res.get("endpoint_version", "fast-pipeline"),
-        res.get("latency_ms", 0.0),
-        datetime.now().isoformat(),
-        res.get("reason") if res.get("status") == "FETCH_FAILED" else None
-    ))
-    conn.commit()
     conn.close()
 
     return DuplicateCheckResponse(
@@ -406,14 +401,15 @@ def create_record(req: RecordCreateRequest):
 
     action = req.action.upper()
     if action == "SEND_FOR_REVIEW":
-        # Section 9 Rule 6: Validate Speaker Duration Cap
-        cap_check = validate_speaker_duration_cap(conn, req.speakers_id, dur_seconds)
-        if not cap_check["is_valid"]:
-            conn.close()
-            raise HTTPException(
-                status_code=400,
-                detail=f"Rejection: {cap_check['message']}"
-            )
+        # Section 9 Rule 6: Validate Speaker Duration Cap (only if speaker_id provided)
+        if (req.speakers_id or "").strip():
+            cap_check = validate_speaker_duration_cap(conn, req.speakers_id, dur_seconds)
+            if not cap_check["is_valid"]:
+                conn.close()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Rejection: {cap_check['message']}"
+                )
         new_status = "PENDING_REVALIDATION"
     elif action == "REJECT":
         new_status = "REJECTED_BY_RESEARCHER"
@@ -443,7 +439,7 @@ def create_record(req: RecordCreateRequest):
                 channel_name = line.split(":", 1)[1].strip()
                 break
     if not channel_name:
-        channel_name = req.speakers_id.strip()
+        channel_name = (req.speakers_id or "").strip()
 
     dataset_name = req.dataset_name or derived_title.replace(" ", "_")[:60]
     assigned_to = req.assigned_to or req.researched_by.strip()
@@ -457,7 +453,7 @@ def create_record(req: RecordCreateRequest):
     remark = req.remark or ""
 
     # Licensing Detection & Verification Fields (Requirements 5-8)
-    detected_lic = req.detected_license or req.licensing.strip()
+    detected_lic = req.detected_license or (req.licensing or "Unknown / Not Specified").strip()
     det_source = req.license_detection_source or "manual"
     ver_status = req.license_verification_status or "NEEDS_VERIFICATION"
     rev_decision = req.license_reviewer_decision or "PENDING"
@@ -491,11 +487,11 @@ def create_record(req: RecordCreateRequest):
             req.gender.strip(),
             formatted_dur,
             dur_seconds,
-            req.accent.strip() or "Normal Accent",
-            req.licensing.strip(),
+            (req.accent or "Normal Accent").strip(),
+            (req.licensing or "Unknown / Not Specified").strip(),
             req.licensing_evidence.strip() if req.licensing_evidence else "",
             sanskrit_val,
-            req.speakers_id.strip(),
+            (req.speakers_id or "").strip(),
             req.researched_by.strip(),
             None,
             new_status,
@@ -953,15 +949,8 @@ def test_youtube_api_endpoint(req: Optional[YouTubeTestRequest] = None):
 
 @app.get("/api/audit/decisions")
 def get_decision_audit_logs(limit: int = 50):
-    """Retrieves recent duplicate detection decisions for compliance and analysis."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM decision_audit ORDER BY id DESC LIMIT ?
-    """, (limit,))
-    logs = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-    return logs
+    """Deprecated endpoint: duplicate decision auditing is disabled."""
+    return []
 
 
 # ==============================================================================
