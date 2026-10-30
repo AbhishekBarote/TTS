@@ -29,5 +29,8 @@ static/media/raw/
 static/media/segments/
 static/media/_tmp/
 
-# tts_database is a standalone package with its own git repo — not tracked here
-tts_database/
+# Test cache
+.pytest_cache/
+**/.pytest_cache/
+.git_backup/
+**/.git_backup/

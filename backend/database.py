@@ -207,7 +207,7 @@ class PgConnectionWrapper:
 
 def get_connection() -> PgConnectionWrapper:
     """Returns a PostgreSQL connection wrapped for call parity."""
-    raw_conn = psycopg2.connect(DATABASE_URL)
+    raw_conn = psycopg2.connect(DATABASE_URL, client_encoding='UTF8')
     return PgConnectionWrapper(raw_conn)
 
 
