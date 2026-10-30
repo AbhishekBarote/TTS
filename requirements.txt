@@ -2,6 +2,10 @@
 fastapi==0.142.2
 uvicorn==0.54.0
 
+# PostgreSQL Database Drivers (Server-Ready psycopg v3 + psycopg2)
+psycopg[binary]>=3.1.0
+psycopg2-binary>=2.9.9
+
 # Data Validation & Schemas
 pydantic==2.13.5
 

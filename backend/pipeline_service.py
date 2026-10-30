@@ -53,44 +53,8 @@ _pipeline_jobs: Dict[int, Dict[str, Any]] = {}
 # ── Database helpers ──────────────────────────────────────────────────────────
 
 def ensure_audio_segments_table():
-    """Idempotently creates/migrates the pipeline_jobs table."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.executescript("""
-        CREATE TABLE IF NOT EXISTS pipeline_jobs (
-            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-            record_id            INTEGER NOT NULL UNIQUE,
-            job_id               TEXT DEFAULT '',
-            file_name            TEXT DEFAULT '',
-            audio_link           TEXT DEFAULT '',
-            speaker_id           TEXT DEFAULT '',
-            speaker_name         TEXT DEFAULT '',
-            gender               TEXT DEFAULT 'auto',
-            denoise_model        TEXT DEFAULT 'BS-Roformer',
-            asr_model            TEXT DEFAULT 'Whisper Large-v3',
-            language             TEXT DEFAULT 'English',
-            stage                TEXT DEFAULT 'QUEUED',
-            step_id              TEXT DEFAULT 'validate',
-            step_index           INTEGER DEFAULT 0,
-            total_steps          INTEGER DEFAULT 6,
-            step_name            TEXT DEFAULT 'Initializing',
-            progress_pct         INTEGER DEFAULT 0,
-            started_at           TEXT,
-            started_at_display   TEXT,
-            finished_at          TEXT,
-            elapsed_seconds      INTEGER DEFAULT 0,
-            took_formatted       TEXT DEFAULT '',
-            segments_count       INTEGER DEFAULT 0,
-            error                TEXT,
-            created_at           TEXT NOT NULL,
-            updated_at           TEXT NOT NULL,
-            FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_pj_record_id ON pipeline_jobs(record_id);
-        CREATE INDEX IF NOT EXISTS idx_pj_stage     ON pipeline_jobs(stage);
-    """)
-    conn.commit()
-    conn.close()
+    """No-op: single table architecture stores pipeline_job and audio_segments in JSONB."""
+    pass
 
 
 def format_took(seconds: int) -> str:
@@ -113,126 +77,74 @@ def format_job_timestamp(dt: Optional[datetime] = None) -> str:
 
 
 def upsert_pipeline_job(record_id: int, **fields) -> Dict[str, Any]:
-    """Persists job update to SQLite and updates in-memory cache."""
+    """Persists job update to DB (JSONB column) and updates in-memory cache."""
     conn = get_connection()
     cursor = conn.cursor()
     now_iso = datetime.now().isoformat()
     fields["updated_at"] = now_iso
+    fields["record_id"] = record_id
 
-    cursor.execute("SELECT * FROM pipeline_jobs WHERE record_id = ?", (record_id,))
-    existing = cursor.fetchone()
-
-    if existing:
-        set_cols = ", ".join(f"{k} = ?" for k in fields)
-        cursor.execute(
-            f"UPDATE pipeline_jobs SET {set_cols} WHERE record_id = ?",
-            list(fields.values()) + [record_id]
-        )
-    else:
-        fields["record_id"] = record_id
-        if "created_at" not in fields:
-            fields["created_at"] = now_iso
-        cols = ", ".join(fields.keys())
-        placeholders = ", ".join("?" for _ in fields)
-        cursor.execute(
-            f"INSERT INTO pipeline_jobs ({cols}) VALUES ({placeholders})",
-            list(fields.values())
-        )
-
-    conn.commit()
-    cursor.execute("SELECT * FROM pipeline_jobs WHERE record_id = ?", (record_id,))
+    cursor.execute("SELECT pipeline_job FROM indian_english_records WHERE id = %s", (record_id,))
     row = cursor.fetchone()
+    current_job = {}
+    if row and row["pipeline_job"]:
+        current_job = row["pipeline_job"] if isinstance(row["pipeline_job"], dict) else json.loads(row["pipeline_job"])
+
+    if "created_at" not in current_job and "created_at" not in fields:
+        fields["created_at"] = now_iso
+
+    current_job.update(fields)
+    cursor.execute(
+        "UPDATE indian_english_records SET pipeline_job = %s WHERE id = %s",
+        (json.dumps(current_job), record_id)
+    )
+    conn.commit()
     conn.close()
 
-    job_dict = dict(row) if row else fields
-    _pipeline_jobs[record_id] = job_dict
-    return job_dict
+    _pipeline_jobs[record_id] = current_job
+    return current_job
 
 
 def get_all_pipeline_jobs() -> List[Dict[str, Any]]:
     """Returns all pipeline jobs ordered by active jobs first, then updated_at DESC."""
-    ensure_audio_segments_table()
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Auto-sync: Discover any records with pipeline statuses that don't have a row in pipeline_jobs yet
     cursor.execute("""
-        SELECT r.id, r.status, r.audio_link, r.speakers_id, r.speaker_channel_name,
-               r.gender, r.description, r.platform_item_id, r.updated_at, r.created_at
-        FROM records r
-        LEFT JOIN pipeline_jobs pj ON r.id = pj.record_id
-        WHERE pj.id IS NULL AND r.status IN ('PIPELINE_PROCESSING', 'VALIDATION_READY', 'COMPLETED')
+        SELECT id, pipeline_job, status as record_status, description as record_description,
+               before_processing_duration, after_processing_duration, updated_at
+        FROM indian_english_records
+        WHERE pipeline_job IS NOT NULL
     """)
-    orphan_records = cursor.fetchall()
-    now_iso = datetime.now().isoformat()
-    now_display = format_job_timestamp(datetime.now())
-
-    for rec in orphan_records:
-        r = dict(rec)
-        rec_id = r["id"]
-        status = r["status"]
-        gender = (r.get("gender") or "auto").lower()
-        gen = gender[0].upper() if gender else "U"
-        item_id = r.get("platform_item_id") or ""
-        desc = (r.get("description") or "").strip()
-        if item_id:
-            file_name = f"{item_id}_{gen}.wav"
-        elif desc:
-            clean_desc = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in desc[:35]).strip("_")
-            file_name = f"{clean_desc}_{gen}.wav"
-        else:
-            file_name = f"audio_rec_{rec_id}_{gen}.wav"
-
-        stage = "PROCESSING" if status == "PIPELINE_PROCESSING" else "DONE"
-        pct = 25 if stage == "PROCESSING" else 100
-        step_id = "validate" if stage == "PROCESSING" else "zip"
-        step_index = 1 if stage == "PROCESSING" else 5
-        step_name = "Processing in background..." if stage == "PROCESSING" else "Finished"
-
-        seg_cnt = 0
-
-        cursor.execute("""
-            INSERT OR REPLACE INTO pipeline_jobs
-            (record_id, job_id, file_name, audio_link, speaker_id, speaker_name,
-             gender, denoise_model, asr_model, language, stage, step_id, step_index,
-             total_steps, step_name, progress_pct, started_at, started_at_display,
-             finished_at, elapsed_seconds, took_formatted, segments_count, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            rec_id, f"job_{rec_id:04d}", file_name, r.get("audio_link") or "",
-            r.get("speakers_id") or "", r.get("speaker_channel_name") or "",
-            gender, "BS-Roformer", "Whisper Large-v3", "English",
-            stage, step_id, step_index, 6, step_name, pct,
-            r.get("updated_at") or now_iso, now_display,
-            now_iso if stage == "DONE" else None, 0, "", seg_cnt,
-            r.get("created_at") or now_iso, now_iso
-        ))
-    if orphan_records:
-        conn.commit()
-
-    cursor.execute("""
-        SELECT pj.*, r.status as record_status, r.description as record_description,
-               r.before_processing_duration, r.after_processing_duration
-        FROM pipeline_jobs pj
-        LEFT JOIN records r ON pj.record_id = r.id
-        ORDER BY 
-            CASE pj.stage 
-                WHEN 'PROCESSING' THEN 1 
-                WHEN 'DOWNLOADING' THEN 2 
-                WHEN 'EXTRACTING' THEN 3 
-                ELSE 4 
-            END,
-            pj.updated_at DESC
-    """)
-    rows = [dict(r) for r in cursor.fetchall()]
+    rows = cursor.fetchall()
     conn.close()
-    return rows
+
+    job_list = []
+    for r in rows:
+        job_data = r["pipeline_job"]
+        if isinstance(job_data, str):
+            try:
+                job_data = json.loads(job_data)
+            except Exception:
+                job_data = {}
+        if not isinstance(job_data, dict):
+            continue
+        job_data["record_id"] = r["id"]
+        job_data["record_status"] = r["record_status"]
+        job_data["record_description"] = r["record_description"]
+        job_data["before_processing_duration"] = r["before_processing_duration"]
+        job_data["after_processing_duration"] = r["after_processing_duration"]
+        job_list.append(job_data)
+
+    stage_order = {'PROCESSING': 1, 'DOWNLOADING': 2, 'EXTRACTING': 3}
+    job_list.sort(key=lambda j: (stage_order.get(j.get("stage"), 4), str(j.get("updated_at", ""))), reverse=False)
+    return job_list
 
 
 def get_record(record_id: int) -> Optional[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM records WHERE id = ?", (record_id,))
+    cursor.execute("SELECT * FROM indian_english_records WHERE id = %s", (record_id,))
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -244,9 +156,9 @@ def update_record_status(record_id: int, status: str, extra: Optional[Dict] = No
     updates = {"status": status, "updated_at": datetime.now().isoformat()}
     if extra:
         updates.update(extra)
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    set_clause = ", ".join(f"{k} = %s" for k in updates)
     cursor.execute(
-        f"UPDATE records SET {set_clause} WHERE id = ?",
+        f"UPDATE indian_english_records SET {set_clause} WHERE id = %s",
         list(updates.values()) + [record_id]
     )
     conn.commit()
@@ -262,7 +174,17 @@ def get_wav_duration(wav_path: str) -> float:
 
 
 def get_segments(record_id: int) -> List[Dict[str, Any]]:
-    return []
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT audio_segments FROM indian_english_records WHERE id = %s", (record_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row or not row["audio_segments"]:
+        return []
+    segs = row["audio_segments"]
+    if isinstance(segs, str):
+        segs = json.loads(segs)
+    return segs if isinstance(segs, list) else []
 
 
 def validate_segment(
@@ -275,24 +197,48 @@ def validate_segment(
     conn = get_connection()
     cursor = conn.cursor()
     now = datetime.now().isoformat()
-    fields: Dict[str, Any] = {"validation_status": status, "validated_at": now}
-    if validated_by:
-        fields["validated_by"] = validated_by
-    if transcription is not None:
-        fields["transcription"] = transcription
-    if rejection_reason is not None:
-        fields["rejection_reason"] = rejection_reason
 
-    set_clause = ", ".join(f"{k} = ?" for k in fields)
-    cursor.execute(
-        f"UPDATE audio_segments SET {set_clause} WHERE id = ?",
-        list(fields.values()) + [segment_id]
-    )
-    conn.commit()
-    cursor.execute("SELECT * FROM audio_segments WHERE id = ?", (segment_id,))
-    row = cursor.fetchone()
+    target_rec_id = segment_id // 10000 if segment_id > 10000 else None
+    if target_rec_id:
+        cursor.execute("SELECT id, audio_segments FROM indian_english_records WHERE id = %s", (target_rec_id,))
+        rows = cursor.fetchall()
+    else:
+        cursor.execute("SELECT id, audio_segments FROM indian_english_records WHERE audio_segments != '[]'::jsonb")
+        rows = cursor.fetchall()
+
+    target_segment = None
+    for r in rows:
+        rec_id = r["id"]
+        segs = r["audio_segments"]
+        if isinstance(segs, str):
+            segs = json.loads(segs)
+        if not isinstance(segs, list):
+            continue
+
+        updated = False
+        for s in segs:
+            if s.get("id") == segment_id:
+                s["validation_status"] = status
+                s["validated_at"] = now
+                if validated_by:
+                    s["validated_by"] = validated_by
+                if transcription is not None:
+                    s["transcription"] = transcription
+                if rejection_reason is not None:
+                    s["rejection_reason"] = rejection_reason
+                target_segment = dict(s)
+                updated = True
+                break
+        if updated:
+            cursor.execute(
+                "UPDATE indian_english_records SET audio_segments = %s WHERE id = %s",
+                (json.dumps(segs), rec_id)
+            )
+            conn.commit()
+            break
+
     conn.close()
-    return dict(row) if row else {}
+    return target_segment or {}
 
 
 def finalize_record_validation(record_id: int, finalized_by: str) -> Dict[str, Any]:
@@ -303,22 +249,17 @@ def finalize_record_validation(record_id: int, finalized_by: str) -> Dict[str, A
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Accepted segments only
-    cursor.execute(
-        """SELECT duration_seconds FROM audio_segments
-           WHERE record_id = ? AND validation_status = 'ACCEPTED'""",
-        (record_id,)
-    )
-    accepted = cursor.fetchall()
-    accepted_count = len(accepted)
-    total_seconds = sum(float(r["duration_seconds"] or 0) for r in accepted)
+    cursor.execute("SELECT audio_segments FROM indian_english_records WHERE id = %s", (record_id,))
+    row = cursor.fetchone()
+    segs = []
+    if row and row["audio_segments"]:
+        raw_segs = row["audio_segments"]
+        segs = raw_segs if isinstance(raw_segs, list) else json.loads(raw_segs)
 
-    # Total segments
-    cursor.execute(
-        "SELECT COUNT(*) as cnt FROM audio_segments WHERE record_id = ?",
-        (record_id,)
-    )
-    total_segs = cursor.fetchone()["cnt"]
+    total_segs = len(segs)
+    accepted = [s for s in segs if s.get("validation_status") == "ACCEPTED"]
+    accepted_count = len(accepted)
+    total_seconds = sum(float(s.get("duration_seconds") or 0) for s in accepted)
 
     h = int(total_seconds) // 3600
     m = (int(total_seconds) % 3600) // 60
@@ -329,15 +270,15 @@ def finalize_record_validation(record_id: int, finalized_by: str) -> Dict[str, A
     today = datetime.now().strftime("%d%m%y")
 
     cursor.execute("""
-        UPDATE records
-        SET after_processing_duration = ?,
-            total_files = ?,
-            completion_date = ?,
+        UPDATE indian_english_records
+        SET after_processing_duration = %s,
+            total_files = %s,
+            completion_date = %s,
             data_available = 'Processed & Segmented',
             status = 'COMPLETED',
-            revalidated_by = ?,
-            updated_at = ?
-        WHERE id = ?
+            revalidated_by = %s,
+            updated_at = %s
+        WHERE id = %s
     """, (after_dur, str(accepted_count), today, finalized_by, now, record_id))
     conn.commit()
     conn.close()
@@ -354,10 +295,8 @@ def finalize_record_validation(record_id: int, finalized_by: str) -> Dict[str, A
     }
 
 
-# ── Job Progress Store ────────────────────────────────────────────────────────
-
 def _set_job(record_id: int, **kwargs):
-    """Updates in-memory store and SQLite table."""
+    """Updates in-memory store and DB column."""
     job = _pipeline_jobs.setdefault(record_id, {"record_id": record_id})
     job.update(kwargs)
     job["updated_at"] = datetime.now().isoformat()
@@ -368,23 +307,28 @@ def _set_job(record_id: int, **kwargs):
 
 
 def get_job_status(record_id: int) -> Dict[str, Any]:
-    ensure_audio_segments_table()
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT pj.*, r.status as record_status, r.description as record_description,
-               r.before_processing_duration, r.after_processing_duration
-        FROM pipeline_jobs pj
-        LEFT JOIN records r ON pj.record_id = r.id
-        WHERE pj.record_id = ?
+        SELECT pipeline_job, status as record_status, description as record_description,
+               before_processing_duration, after_processing_duration
+        FROM indian_english_records
+        WHERE id = %s
     """, (record_id,))
     row = cursor.fetchone()
     conn.close()
 
-    if row:
-        d = dict(row)
-        _pipeline_jobs[record_id] = d
-        return d
+    if row and row["pipeline_job"]:
+        job_data = row["pipeline_job"]
+        if isinstance(job_data, str):
+            job_data = json.loads(job_data)
+        if isinstance(job_data, dict):
+            job_data["record_status"] = row["record_status"]
+            job_data["record_description"] = row["record_description"]
+            job_data["before_processing_duration"] = row["before_processing_duration"]
+            job_data["after_processing_duration"] = row["after_processing_duration"]
+            _pipeline_jobs[record_id] = job_data
+            return job_data
 
     return _pipeline_jobs.get(record_id, {
         "record_id": record_id,
@@ -396,8 +340,6 @@ def get_job_status(record_id: int) -> Dict[str, Any]:
         "error": None
     })
 
-
-# ── Endpoint Processing ───────────────────────────────────────────────────────
 
 async def run_pipeline_for_record(
     record_id: int,
@@ -665,16 +607,9 @@ def _parse_and_store_segments(
 ) -> List[Dict[str, Any]]:
     """
     Finds the metadata CSV in out_dir, reads each segment row,
-    computes WAV duration, and inserts/replaces rows in audio_segments.
+    computes WAV duration, and stores segments as JSONB in indian_english_records.
     Returns the list of segment dicts stored.
     """
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    # Clear existing segments for this record (re-processing should refresh them)
-    cursor.execute("DELETE FROM audio_segments WHERE record_id = ?", (record_id,))
-
-    # Find metadata CSV (server produces: accepted_metadata.csv or metadata.csv)
     csv_candidates = sorted(out_dir.rglob("*.csv"))
     meta_csv = next(
         (c for c in csv_candidates
@@ -696,14 +631,11 @@ def _parse_and_store_segments(
                     row_lang = row.get("language", language).strip()
                     row_gender = row.get("gender", gender).strip()
 
-                    # Extract the true segment WAV filename
-                    # In metadata.csv, audio_path is e.g. "61_m4Q9b4h0jpg/61_m4Q9b4h0jpg_seg_0001.wav"
                     target_seg_name = Path(audio_path_raw).name if audio_path_raw else file_name
                     if not target_seg_name.lower().endswith(".wav"):
                         target_seg_name += ".wav"
 
                     abs_wav = None
-                    # Search specifically for files (not directories) matching target_seg_name
                     file_matches = [f for f in out_dir.rglob(target_seg_name) if f.is_file()]
                     if file_matches:
                         abs_wav = file_matches[0]
@@ -723,21 +655,9 @@ def _parse_and_store_segments(
 
                     dur = get_wav_duration(str(abs_wav)) if (abs_wav.exists() and abs_wav.is_file()) else 0.0
                     display_name = abs_wav.name if (abs_wav.exists() and abs_wav.is_file()) else target_seg_name
-
+                    seg_id = (record_id * 10000) + (idx + 1)
                     now = datetime.now().isoformat()
-                    cursor.execute("""
-                        INSERT INTO audio_segments
-                        (record_id, segment_index, file_name, audio_path, relative_url,
-                         transcription, original_transcription, duration_seconds,
-                         language, gender, validation_status, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
-                    """, (
-                        record_id, idx,
-                        display_name, str(abs_wav), rel_url,
-                        transcription, transcription,
-                        dur, row_lang, row_gender, now
-                    ))
-                    seg_id = cursor.lastrowid
+
                     segments.append({
                         "id": seg_id,
                         "record_id": record_id,
@@ -756,7 +676,6 @@ def _parse_and_store_segments(
         except Exception as exc:
             logger.error(f"[Record {record_id}] Failed to parse metadata CSV: {exc}")
     else:
-        # No CSV found — index every WAV file as a segment with empty transcript
         wav_files = sorted(out_dir.rglob("*.wav"))
         logger.warning(
             f"[Record {record_id}] No metadata CSV found; indexing {len(wav_files)} WAV(s) directly"
@@ -767,18 +686,9 @@ def _parse_and_store_segments(
                 + wav_file.relative_to(out_dir).as_posix()
             )
             dur = get_wav_duration(str(wav_file))
+            seg_id = (record_id * 10000) + (idx + 1)
             now = datetime.now().isoformat()
-            cursor.execute("""
-                INSERT INTO audio_segments
-                (record_id, segment_index, file_name, audio_path, relative_url,
-                 transcription, original_transcription, duration_seconds,
-                 language, gender, validation_status, created_at)
-                VALUES (?, ?, ?, ?, ?, '', '', ?, ?, ?, 'PENDING', ?)
-            """, (
-                record_id, idx, wav_file.name, str(wav_file), rel_url,
-                dur, language, gender, now
-            ))
-            seg_id = cursor.lastrowid
+
             segments.append({
                 "id": seg_id,
                 "record_id": record_id,
@@ -795,6 +705,12 @@ def _parse_and_store_segments(
                 "created_at": now
             })
 
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE indian_english_records SET audio_segments = %s WHERE id = %s",
+        (json.dumps(segments), record_id)
+    )
     conn.commit()
     conn.close()
     return segments

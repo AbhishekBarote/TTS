@@ -1,6 +1,6 @@
 """
 PostgreSQL Database manager for Centralized Audio Research and Revalidation Workflow.
-Replaces SQLite persistence with PostgreSQL (psycopg2) and provides transparent
+Uses PostgreSQL (psycopg2) and provides transparent
 query compatibility, strict uniqueness constraints, per-speaker duration tracking ledger,
 and full duplicate decision audit logs.
 """
@@ -44,7 +44,7 @@ def _convert_placeholders(sql: str) -> str:
 
 
 def _translate_sql(sql: str) -> tuple[str, bool]:
-    """Translates SQLite-specific SQL idioms to PostgreSQL equivalents."""
+    """Translates legacy SQL idioms to PostgreSQL equivalents."""
     s = sql.strip()
 
     # 1. PRAGMA table_info(<table>) -> information_schema
@@ -57,7 +57,7 @@ def _translate_sql(sql: str) -> tuple[str, bool]:
             False
         )
 
-    # 2. SQLite AUTOINCREMENT
+    # 2. AUTOINCREMENT -> SERIAL
     s = re.sub(r"(?i)INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT", "SERIAL PRIMARY KEY", s)
 
     # 3. INSERT OR IGNORE INTO speaker_duration_ledger
@@ -109,7 +109,7 @@ def _translate_sql(sql: str) -> tuple[str, bool]:
 
 
 class PgCursorWrapper:
-    """Wraps psycopg2 DictCursor to provide sqlite3 cursor API compatibility."""
+    """Wraps psycopg2 DictCursor to provide a dict-based cursor API."""
 
     def __init__(self, raw_cursor):
         self._cursor = raw_cursor
@@ -176,7 +176,7 @@ class PgCursorWrapper:
 
 
 class PgConnectionWrapper:
-    """Wraps psycopg2 connection to provide sqlite3 connection API compatibility."""
+    """Wraps psycopg2 connection to provide a wrapped connection API."""
 
     def __init__(self, raw_conn):
         self._conn = raw_conn
@@ -206,15 +206,19 @@ class PgConnectionWrapper:
 
 
 def get_connection() -> PgConnectionWrapper:
-    """Returns a PostgreSQL connection wrapped for seamless SQLite-call parity."""
+    """Returns a PostgreSQL connection wrapped for call parity."""
     raw_conn = psycopg2.connect(DATABASE_URL)
     return PgConnectionWrapper(raw_conn)
 
 
 def init_db():
     """Initializes and verifies the PostgreSQL database schema idempotently."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+    except Exception as exc:
+        print(f"Notice: Database connection could not be established during init_db: {exc}")
+        return
 
     # 1. Records table (Video records)
     cursor.execute("""

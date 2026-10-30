@@ -31,7 +31,8 @@ from rapidfuzz import fuzz
 
 from backend.duplicate import TRACKING_PARAMS
 from backend.database import get_connection, get_all_stored_web_and_records
-from backend.llm_adapter import llm_config, LLMAdapter, LLMDecision
+from backend.llm_adapter import LLMAdapter
+
 
 logger = logging.getLogger(__name__)
 
@@ -796,40 +797,84 @@ def execute_fast_verification(
             "endpoint_version": "fast-lexical-engine"
         }
 
-    # Step 6: Conditional Self-Hosted LLM (Only for Plausible Duplicate Candidates)
-    candidate_dict = {
-        "url": url,
-        "canonical_url": final_canonical,
-        "title": title,
-        "channel": author,
-        "channel_name": author,
-        "description": fetched.get("formatted_description", ""),
-        "source": platform
-    }
-
-    decision: LLMDecision = LLMAdapter.evaluate(candidate_dict, top_matches)
+    # Step 6: High-confidence -> rule-based; ambiguous zone (0.62-0.84) -> LLM decision
     latency = round((time.perf_counter() - start_time) * 1000.0, 2)
 
-    matched_existing_rec = None
-    if decision.matched_video_id:
-        for m in top_matches:
-            if str(m.get("id")) == decision.matched_video_id or str(m.get("platform_item_id")) == decision.matched_video_id:
-                matched_existing_rec = m
-                break
+    if best_score >= 0.85 or (best_score >= 0.78 and best_match.get("same_author")):
+        # Clear duplicate - no LLM needed
+        evidence = ["high_lexical_similarity"]
+        if best_match.get("same_author"):
+            evidence.append("matching_author")
+        return {
+            "status": "DUPLICATE",
+            "is_duplicate": True,
+            "confidence": round(best_score, 2),
+            "matched_video_id": str(best_match["id"]),
+            "reason": (
+                f"High lexical similarity ({int(best_score * 100)}%)"
+                f"{' with matching author' if best_match.get('same_author') else ''} "
+                f"to Record #{best_match['id']}."
+            ),
+            "evidence_fields": evidence,
+            "canonical_url": final_canonical,
+            "platform": platform,
+            "platform_item_id": platform_item_id,
+            "metadata": fetched,
+            "existing_record": best_match,
+            "similar_records": top_matches,
+            "latency_ms": latency,
+            "endpoint_version": "fast-lexical-engine"
+        }
 
+    if best_score >= 0.62:
+        # Ambiguous zone - delegate to LLM for the final call
+        candidate_payload = {
+            "title": fetched.get("title", ""),
+            "description": fetched.get("description", ""),
+            "channel": fetched.get("channel", ""),
+            "channel_name": fetched.get("channel", ""),
+            "duration": fetched.get("duration", ""),
+            "duration_seconds": fetched.get("duration_seconds", 0),
+            "platform_item_id": platform_item_id,
+            "speakers_id": fetched.get("speaker_id", ""),
+        }
+        decision = LLMAdapter.evaluate(candidate_payload, top_matches)
+        total_latency = round((time.perf_counter() - start_time) * 1000.0, 2)
+        matched_rec = best_match if decision.matched_video_id else None
+        return {
+            "status": decision.status,
+            "is_duplicate": (decision.status == "DUPLICATE"),
+            "confidence": decision.confidence,
+            "matched_video_id": decision.matched_video_id,
+            "reason": decision.reason,
+            "evidence_fields": decision.evidence_fields,
+            "canonical_url": final_canonical,
+            "platform": platform,
+            "platform_item_id": platform_item_id,
+            "metadata": fetched,
+            "existing_record": matched_rec,
+            "similar_records": top_matches,
+            "latency_ms": total_latency,
+            "endpoint_version": decision.endpoint_version,
+            "llm_called": True,
+            "llm_error": decision.error_state,
+        }
+
+    # Below threshold - clearly unique
     return {
-        "status": decision.status,
-        "is_duplicate": (decision.status == "DUPLICATE"),
-        "confidence": decision.confidence,
-        "matched_video_id": decision.matched_video_id,
-        "reason": decision.reason,
-        "evidence_fields": decision.evidence_fields,
+        "status": "UNIQUE",
+        "is_duplicate": False,
+        "confidence": 0.85,
+        "matched_video_id": None,
+        "reason": "Lexical similarity below duplicate threshold.",
+        "evidence_fields": ["lexical_below_threshold"],
         "canonical_url": final_canonical,
         "platform": platform,
         "platform_item_id": platform_item_id,
         "metadata": fetched,
-        "existing_record": matched_existing_rec,
+        "existing_record": None,
         "similar_records": top_matches,
         "latency_ms": latency,
-        "endpoint_version": decision.endpoint_version
+        "endpoint_version": "fast-lexical-engine"
     }
+

@@ -1590,14 +1590,8 @@ from backend.pipeline_service import (
     get_segments,
     validate_segment,
     finalize_record_validation,
-    ensure_audio_segments_table,
 )
 
-# Ensure audio_segments table exists on startup
-try:
-    ensure_audio_segments_table()
-except Exception as _e:
-    pass  # table creation is idempotent, continue
 
 # Mount the media directory for browser audio playback
 MEDIA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "media")

@@ -20,7 +20,14 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# Database files
+*.db
+
+
 # Media storage
 static/media/raw/
 static/media/segments/
 static/media/_tmp/
+
+# tts_database is a standalone package with its own git repo — not tracked here
+tts_database/
